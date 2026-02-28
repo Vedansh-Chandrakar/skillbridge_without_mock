@@ -27,6 +27,13 @@ export default function CampusManagementPage() {
   const [editForm, setEditForm]     = useState({});
   const [deleteCampus, setDeleteCampus] = useState(null);
 
+  // ── Requests tab ──
+  const [activeTab, setActiveTab]           = useState('campuses');
+  const [campusRequests, setCampusRequests] = useState([]);
+  const [reqLoading, setReqLoading]         = useState(false);
+  const [reqError, setReqError]             = useState('');
+  const [reqAction, setReqAction]           = useState({}); // { [id]: 'approving'|'rejecting' }
+
   // ── Fetch ──
   const fetchCampuses = useCallback(async () => {
     setLoading(true); setError('');
@@ -39,7 +46,18 @@ export default function CampusManagementPage() {
     finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { fetchCampuses(); }, [fetchCampuses]);
+  const fetchCampusRequests = useCallback(async () => {
+    setReqLoading(true); setReqError('');
+    try {
+      const res  = await fetch(ADMIN_ENDPOINTS.CAMPUS_REQUESTS, { headers: authHeaders() });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to load requests.');
+      setCampusRequests(data.data);
+    } catch (err) { setReqError(err.message); }
+    finally { setReqLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchCampuses(); fetchCampusRequests(); }, [fetchCampuses, fetchCampusRequests]);
 
   const filtered = campuses.filter((c) =>
     c.name.toLowerCase().includes(search.toLowerCase()),
@@ -95,19 +113,93 @@ export default function CampusManagementPage() {
     } catch (err) { alert(err.message); }
   };
 
+  /* ── Campus Requests ── */
+  const handleApproveRequest = async (req) => {
+    setReqAction((prev) => ({ ...prev, [req.id]: 'approving' }));
+    try {
+      const res  = await fetch(ADMIN_ENDPOINTS.APPROVE_CAMPUS_REQUEST(req.id), {
+        method: 'PATCH', headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to approve.');
+      setCampusRequests((prev) => prev.map((r) => r.id === req.id ? { ...r, status: 'approved' } : r));
+      fetchCampuses();
+    } catch (err) { alert(err.message); }
+    finally { setReqAction((prev) => ({ ...prev, [req.id]: null })); }
+  };
+
+  const handleRejectRequest = async (req) => {
+    setReqAction((prev) => ({ ...prev, [req.id]: 'rejecting' }));
+    try {
+      const res  = await fetch(ADMIN_ENDPOINTS.REJECT_CAMPUS_REQUEST(req.id), {
+        method: 'PATCH', headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to reject.');
+      setCampusRequests((prev) => prev.map((r) => r.id === req.id ? { ...r, status: 'rejected' } : r));
+    } catch (err) { alert(err.message); }
+    finally { setReqAction((prev) => ({ ...prev, [req.id]: null })); }
+  };
+
+  const pendingCount = campusRequests.filter((r) => r.status === 'pending').length;
+
   return (
     <div>
       <PageHeader
         title="Campus Management"
         subtitle="Manage all registered campuses on the platform"
         actions={
-          <Button onClick={() => setShowAddModal(true)}>
-            <PlusIcon className="h-4 w-4" /> Add Campus
-          </Button>
+          <div className="flex items-center gap-3">
+            {pendingCount > 0 && (
+              <button
+                onClick={() => setActiveTab('requests')}
+                className="flex items-center gap-1.5 rounded-xl bg-yellow-50 px-3 py-2 text-sm font-medium text-yellow-700 hover:bg-yellow-100 transition-colors"
+              >
+                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-yellow-400 text-xs font-bold text-white">
+                  {pendingCount}
+                </span>
+                Campus Requests
+              </button>
+            )}
+            <Button onClick={() => setShowAddModal(true)}>
+              <PlusIcon className="h-4 w-4" /> Add Campus
+            </Button>
+          </div>
         }
       />
 
       <Card padding={false}>
+        {/* ── Tab bar ── */}
+        <div className="flex items-center gap-1 px-4 pt-3 border-b border-gray-100">
+          <button
+            onClick={() => setActiveTab('campuses')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'campuses'
+                ? 'border-indigo-600 text-indigo-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Campuses
+          </button>
+          <button
+            onClick={() => setActiveTab('requests')}
+            className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'requests'
+                ? 'border-indigo-600 text-indigo-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Campus Requests
+            {pendingCount > 0 && (
+              <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-yellow-400 text-xs font-bold text-white">
+                {pendingCount}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {/* ── Campuses search bar ── */}
+        {activeTab === 'campuses' && (
         <div className="flex items-center justify-between p-4 border-b border-gray-100">
           <SearchInput
             value={search}
@@ -119,7 +211,9 @@ export default function CampusManagementPage() {
             <span>{filtered.length} campuses</span>
           </div>
         </div>
+        )}
 
+        {activeTab === 'campuses' && (
         <Table>
           <TableHead>
             <TableHeader>Campus</TableHeader>
@@ -189,6 +283,83 @@ export default function CampusManagementPage() {
             )}
           </TableBody>
         </Table>
+        )}
+
+        {/* ── Requests tab ── */}
+        {activeTab === 'requests' && (
+          <div>
+            {reqLoading ? (
+              <div className="py-10 text-center text-sm text-gray-400">Loading campus requests...</div>
+            ) : reqError ? (
+              <div className="py-10 text-center text-sm text-red-500">
+                {reqError}{' '}
+                <button onClick={fetchCampusRequests} className="underline ml-1">Retry</button>
+              </div>
+            ) : campusRequests.length === 0 ? (
+              <div className="py-10 text-center text-sm text-gray-400">No campus requests yet.</div>
+            ) : (
+              <Table>
+                <TableHead>
+                  <TableHeader>Campus Name</TableHeader>
+                  <TableHeader>Domain</TableHeader>
+                  <TableHeader>Contact Email</TableHeader>
+                  <TableHeader>Message</TableHeader>
+                  <TableHeader>Status</TableHeader>
+                  <TableHeader>Requested</TableHeader>
+                  <TableHeader className="text-right">Actions</TableHeader>
+                </TableHead>
+                <TableBody>
+                  {campusRequests.map((req) => (
+                    <TableRow key={req.id}>
+                      <TableCell>
+                        <div className="flex items-center gap-3">
+                          <Avatar name={req.campusName} size="sm" color="yellow" />
+                          <span className="font-semibold text-gray-900">{req.campusName}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-gray-500">{req.domain || '—'}</TableCell>
+                      <TableCell className="text-gray-500">{req.contactEmail || '—'}</TableCell>
+                      <TableCell className="text-gray-500 max-w-xs truncate">{req.message || '—'}</TableCell>
+                      <TableCell>
+                        <Badge
+                          color={{ pending: 'yellow', approved: 'green', rejected: 'red' }[req.status]}
+                          dot
+                        >
+                          {req.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-gray-500">
+                        {new Date(req.createdAt).toLocaleDateString()}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {req.status === 'pending' ? (
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              onClick={() => handleApproveRequest(req)}
+                              disabled={!!reqAction[req.id]}
+                              className="rounded-lg px-2.5 py-1 text-xs font-semibold bg-green-50 text-green-700 hover:bg-green-100 transition-colors disabled:opacity-50"
+                            >
+                              {reqAction[req.id] === 'approving' ? 'Approving…' : 'Approve'}
+                            </button>
+                            <button
+                              onClick={() => handleRejectRequest(req)}
+                              disabled={!!reqAction[req.id]}
+                              className="rounded-lg px-2.5 py-1 text-xs font-semibold bg-red-50 text-red-700 hover:bg-red-100 transition-colors disabled:opacity-50"
+                            >
+                              {reqAction[req.id] === 'rejecting' ? 'Rejecting…' : 'Reject'}
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-gray-400 italic">Done</span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+        )}
       </Card>
 
       {/* ── Add Campus Modal ── */}

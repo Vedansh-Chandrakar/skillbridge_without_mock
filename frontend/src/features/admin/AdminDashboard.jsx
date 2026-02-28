@@ -1,3 +1,4 @@
+import { useState, useEffect, useCallback } from 'react';
 import { PageHeader, StatCard, Card, CardHeader, Badge, Avatar, EmptyState } from '@/components/shared';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -6,18 +7,57 @@ import {
   BriefcaseIcon,
   ChartBarIcon,
   ArrowTrendingUpIcon,
-  CurrencyDollarIcon,
+  ShieldExclamationIcon,
   ArrowRightIcon,
+  CheckBadgeIcon,
 } from '@heroicons/react/24/outline';
+import { ADMIN_ENDPOINTS } from '@/config/api';
 
-const stats = [];
+const authHeaders = () => ({
+  Authorization: `Bearer ${localStorage.getItem('sb_token') || ''}`,
+});
 
-const recentActivity = [];
+// Icon + color map keyed by stat key returned from backend
+const STAT_META = {
+  totalUsers:  { icon: UsersIcon,               color: 'blue',   trend: null },
+  campuses:    { icon: BuildingLibraryIcon,      color: 'purple', trend: null },
+  pending:     { icon: ShieldExclamationIcon,    color: 'yellow', trend: null },
+  activeUsers: { icon: CheckBadgeIcon,           color: 'green',  trend: null },
+};
 
-const topCampuses = [];
+function timeAgo(dateStr) {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1)  return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
+  const [stats,          setStats]          = useState([]);
+  const [recentActivity, setRecentActivity] = useState([]);
+  const [topCampuses,    setTopCampuses]    = useState([]);
+  const [loading,        setLoading]        = useState(true);
+  const [error,          setError]          = useState('');
+
+  const fetchDashboard = useCallback(async () => {
+    setLoading(true); setError('');
+    try {
+      const res  = await fetch(ADMIN_ENDPOINTS.DASHBOARD, { headers: authHeaders() });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to load dashboard.');
+      setStats(data.data.stats);
+      setRecentActivity(data.data.recentActivity);
+      setTopCampuses(data.data.topCampuses);
+    } catch (err) { setError(err.message); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchDashboard(); }, [fetchDashboard]);
+
   return (
     <div>
       <PageHeader
@@ -26,44 +66,68 @@ export default function AdminDashboard() {
       />
 
       {/* Stat cards */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {stats.length === 0 ? (
-          <Card className="sm:col-span-2 xl:col-span-3">
-            <EmptyState
-              icon={ChartBarIcon}
-              title="No analytics yet"
-              description="Connect the backend to load platform metrics."
-            />
-          </Card>
-        ) : (
-          stats.map((s) => (
-            <StatCard key={s.label} {...s} />
-          ))
-        )}
-      </div>
+      {loading ? (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {[1,2,3,4].map((i) => (
+            <div key={i} className="h-28 animate-pulse rounded-2xl bg-gray-100" />
+          ))}
+        </div>
+      ) : error ? (
+        <div className="rounded-2xl bg-red-50 px-5 py-4 text-sm text-red-600">{error}</div>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {stats.map((s) => {
+            const meta = STAT_META[s.key] || { icon: ChartBarIcon, color: 'blue' };
+            return (
+              <StatCard
+                key={s.key}
+                label={s.label}
+                value={s.value}
+                icon={meta.icon}
+                color={meta.color}
+              />
+            );
+          })}
+        </div>
+      )}
 
       <div className="mt-8 grid gap-6 lg:grid-cols-5">
         {/* Recent activity */}
         <Card className="lg:col-span-3">
-          <CardHeader title="Recent Activity" subtitle="Latest platform events" />
-          <div className="mt-4 space-y-3">
-            {recentActivity.length === 0 ? (
+          <CardHeader title="Recent Signups" subtitle="Latest user registrations" />
+          <div className="mt-4 space-y-2">
+            {loading ? (
+              <div className="space-y-3">
+                {[1,2,3].map((i) => <div key={i} className="h-12 animate-pulse rounded-xl bg-gray-100" />)}
+              </div>
+            ) : recentActivity.length === 0 ? (
               <EmptyState
                 icon={UsersIcon}
                 title="No recent activity"
-                description="Activity will appear here once events are available."
+                description="Activity will appear here once users register."
               />
             ) : (
               recentActivity.map((item) => (
-                <div key={item.id} className="flex items-start gap-3 rounded-xl p-3 transition-colors hover:bg-gray-50">
-                  <Avatar name={item.user} size="sm" color={item.type === 'campus' ? 'blue' : item.type === 'gig' ? 'green' : 'purple'} />
+                <div key={String(item.id)} className="flex items-start gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-gray-50">
+                  <Avatar
+                    name={item.user}
+                    size="sm"
+                    color={item.type === 'campus' ? 'blue' : item.type === 'student' ? 'green' : 'purple'}
+                  />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm text-gray-900">
                       <span className="font-semibold">{item.user}</span>{' '}
                       <span className="text-gray-500">{item.action}</span>
                     </p>
-                    <p className="text-xs text-gray-400">{item.time}</p>
+                    <p className="text-xs text-gray-400">{item.email} · {timeAgo(item.time)}</p>
                   </div>
+                  <Badge
+                    color={item.status === 'active' ? 'green' : item.status === 'pending' ? 'yellow' : 'red'}
+                    dot
+                    size="sm"
+                  >
+                    {item.status}
+                  </Badge>
                 </div>
               ))
             )}
@@ -82,22 +146,26 @@ export default function AdminDashboard() {
               <ArrowRightIcon className="h-3 w-3" />
             </button>
           </div>
-          <div className="mt-4 space-y-3">
-            {topCampuses.length === 0 ? (
+          <div className="mt-4 space-y-2">
+            {loading ? (
+              <div className="space-y-3">
+                {[1,2,3].map((i) => <div key={i} className="h-12 animate-pulse rounded-xl bg-gray-100" />)}
+              </div>
+            ) : topCampuses.length === 0 ? (
               <EmptyState
                 icon={BuildingLibraryIcon}
-                title="No campus data"
-                description="Campus stats will show after backend integration."
+                title="No campuses yet"
+                description="Add campuses from the Campus Management page."
               />
             ) : (
               topCampuses.map((c, i) => (
-                <div key={c.name} className="flex items-center gap-3 rounded-xl p-3 transition-colors hover:bg-gray-50">
+                <div key={String(c.id)} className="flex items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-gray-50">
                   <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-gray-100 text-xs font-bold text-gray-500">
                     {i + 1}
                   </span>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-gray-900">{c.name}</p>
-                    <p className="text-xs text-gray-500">{c.students} students · {c.gigs} gigs</p>
+                    <p className="text-sm font-semibold text-gray-900 truncate">{c.name}</p>
+                    <p className="text-xs text-gray-500">{c.students} students</p>
                   </div>
                   <Badge color={c.status === 'active' ? 'green' : 'yellow'} dot size="sm">
                     {c.status}

@@ -1,23 +1,60 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   PageHeader, Card, Badge, Avatar, Button, Modal,
   Table, TableHead, TableHeader, TableBody, TableRow, TableCell,
 } from '@/components/shared';
 import { CheckIcon, XMarkIcon, EyeIcon, DocumentTextIcon } from '@heroicons/react/24/outline';
+import { CAMPUS_ENDPOINTS } from '@/config/api';
 
-const REQUESTS = [];
+const statusColor  = { pending: 'yellow', approved: 'green', rejected: 'red' };
+const modeColor    = { Freelancer: 'blue', Recruiter: 'purple', Both: 'cyan' };
 
-const statusColor = { pending: 'yellow', approved: 'green', rejected: 'red' };
+const authHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('sb_token') || ''}`,
+});
 
 export default function CampusVerificationsPage() {
-  const [requests, setRequests] = useState(REQUESTS);
+  const [requests, setRequests]   = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [error, setError]         = useState('');
+  const [actioning, setActioning] = useState({}); // { [id]: 'approving'|'rejecting' }
   const [viewRequest, setViewRequest] = useState(null);
-  const pending = requests.filter((r) => r.status === 'pending');
 
-  const handleAction = (id, action) => {
-    setRequests((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, status: action } : r)),
-    );
+  // ── Fetch ──────────────────────────────────────────────
+  const fetchVerifications = useCallback(async () => {
+    setLoading(true); setError('');
+    try {
+      const res  = await fetch(CAMPUS_ENDPOINTS.VERIFICATIONS, { headers: authHeaders() });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to load verifications.');
+      setRequests(data.data);
+    } catch (err) { setError(err.message); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchVerifications(); }, [fetchVerifications]);
+
+  const pending  = requests.filter((r) => r.status === 'pending');
+  const approved = requests.filter((r) => r.status === 'approved');
+  const rejected = requests.filter((r) => r.status === 'rejected');
+
+  // ── Approve / Reject ───────────────────────────────────
+  const handleAction = async (id, action) => {
+    const url = action === 'approved'
+      ? CAMPUS_ENDPOINTS.APPROVE_VERIFICATION(id)
+      : CAMPUS_ENDPOINTS.REJECT_VERIFICATION(id);
+
+    setActioning((prev) => ({ ...prev, [id]: action === 'approved' ? 'approving' : 'rejecting' }));
+    try {
+      const res  = await fetch(url, { method: 'PATCH', headers: authHeaders() });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Action failed.');
+      setRequests((prev) => prev.map((r) => String(r.id) === String(id) ? data.data : r));
+      // If viewing this student, close the modal
+      if (viewRequest && String(viewRequest.id) === String(id)) setViewRequest(data.data);
+    } catch (err) { alert(err.message); }
+    finally { setActioning((prev) => ({ ...prev, [id]: null })); }
   };
 
   return (
@@ -46,9 +83,7 @@ export default function CampusVerificationsPage() {
             </div>
             <div>
               <p className="text-xs text-gray-500">Approved</p>
-              <p className="text-xl font-bold text-emerald-600">
-                {requests.filter((r) => r.status === 'approved').length}
-              </p>
+              <p className="text-xl font-bold text-emerald-600">{approved.length}</p>
             </div>
           </div>
         </Card>
@@ -59,9 +94,7 @@ export default function CampusVerificationsPage() {
             </div>
             <div>
               <p className="text-xs text-gray-500">Rejected</p>
-              <p className="text-xl font-bold text-red-600">
-                {requests.filter((r) => r.status === 'rejected').length}
-              </p>
+              <p className="text-xl font-bold text-red-600">{rejected.length}</p>
             </div>
           </div>
         </Card>
@@ -71,16 +104,28 @@ export default function CampusVerificationsPage() {
         <Table>
           <TableHead>
             <TableHeader>Student</TableHeader>
-            <TableHeader>Document</TableHeader>
-            <TableHeader>Date</TableHeader>
+            <TableHeader>Mode</TableHeader>
+            <TableHeader>Registered</TableHeader>
             <TableHeader>Status</TableHeader>
             <TableHeader className="text-right">Actions</TableHeader>
           </TableHead>
           <TableBody>
-            {requests.length === 0 ? (
+            {loading ? (
               <TableRow>
                 <TableCell colSpan={5} className="text-center py-10 text-sm text-gray-400">
-                  No verification requests yet.
+                  Loading…
+                </TableCell>
+              </TableRow>
+            ) : error ? (
+              <TableRow>
+                <TableCell colSpan={5} className="text-center py-10 text-sm text-red-500">
+                  {error}{' '}<button onClick={fetchVerifications} className="underline ml-1">Retry</button>
+                </TableCell>
+              </TableRow>
+            ) : requests.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={5} className="text-center py-10 text-sm text-gray-400">
+                  No students in your campus yet.
                 </TableCell>
               </TableRow>
             ) : (
@@ -95,7 +140,7 @@ export default function CampusVerificationsPage() {
                       </div>
                     </div>
                   </TableCell>
-                  <TableCell className="text-gray-600">{r.document}</TableCell>
+                  <TableCell><Badge color={modeColor[r.mode]} size="sm">{r.mode}</Badge></TableCell>
                   <TableCell className="text-gray-500">
                     {new Date(r.submittedAt).toLocaleDateString()}
                   </TableCell>
@@ -107,14 +152,16 @@ export default function CampusVerificationsPage() {
                       <div className="flex items-center justify-end gap-1">
                         <button
                           onClick={() => handleAction(r.id, 'approved')}
-                          className="rounded-lg p-1.5 text-gray-400 hover:bg-emerald-50 hover:text-emerald-600 transition-colors"
+                          disabled={!!actioning[r.id]}
+                          className="rounded-lg p-1.5 text-gray-400 hover:bg-emerald-50 hover:text-emerald-600 transition-colors disabled:opacity-50"
                           title="Approve"
                         >
                           <CheckIcon className="h-4 w-4" />
                         </button>
                         <button
                           onClick={() => handleAction(r.id, 'rejected')}
-                          className="rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                          disabled={!!actioning[r.id]}
+                          className="rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors disabled:opacity-50"
                           title="Reject"
                         >
                           <XMarkIcon className="h-4 w-4" />
@@ -122,7 +169,7 @@ export default function CampusVerificationsPage() {
                         <button
                           onClick={() => setViewRequest(r)}
                           className="rounded-lg p-1.5 text-gray-400 hover:bg-indigo-50 hover:text-indigo-600 transition-colors"
-                          title="View document"
+                          title="View details"
                         >
                           <EyeIcon className="h-4 w-4" />
                         </button>
@@ -148,23 +195,23 @@ export default function CampusVerificationsPage() {
                 <p className="text-sm text-gray-500">{viewRequest.email}</p>
                 <div className="flex items-center gap-2 mt-1">
                   <Badge color={statusColor[viewRequest.status]} dot size="sm">{viewRequest.status}</Badge>
-                  <Badge color="blue" size="sm">{viewRequest.mode}</Badge>
+                  <Badge color={modeColor[viewRequest.mode]} size="sm">{viewRequest.mode}</Badge>
                 </div>
               </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3 rounded-xl bg-gray-50 p-4">
               <div>
-                <p className="text-xs text-gray-400 uppercase font-semibold">Document Type</p>
-                <p className="text-sm font-medium text-gray-900 mt-0.5">{viewRequest.document}</p>
+                <p className="text-xs text-gray-400 uppercase font-semibold">Mode</p>
+                <p className="text-sm font-medium text-gray-900 mt-0.5">{viewRequest.mode}</p>
               </div>
               <div>
-                <p className="text-xs text-gray-400 uppercase font-semibold">Submitted On</p>
+                <p className="text-xs text-gray-400 uppercase font-semibold">Registered On</p>
                 <p className="text-sm font-medium text-gray-900 mt-0.5">{new Date(viewRequest.submittedAt).toLocaleDateString()}</p>
               </div>
               <div>
-                <p className="text-xs text-gray-400 uppercase font-semibold">Requested Mode</p>
-                <p className="text-sm font-medium text-gray-900 mt-0.5">{viewRequest.mode}</p>
+                <p className="text-xs text-gray-400 uppercase font-semibold">Campus</p>
+                <p className="text-sm font-medium text-gray-900 mt-0.5">{viewRequest.campus}</p>
               </div>
               <div>
                 <p className="text-xs text-gray-400 uppercase font-semibold">Status</p>
@@ -172,22 +219,36 @@ export default function CampusVerificationsPage() {
               </div>
             </div>
 
-            <div className="rounded-xl border-2 border-dashed border-gray-200 p-6 flex flex-col items-center justify-center gap-2 bg-gray-50">
-              <DocumentTextIcon className="h-10 w-10 text-gray-300" />
-              <p className="text-sm font-medium text-gray-600">{viewRequest.document}</p>
-              <p className="text-xs text-gray-400">Submitted by {viewRequest.name}</p>
-              <button className="mt-2 rounded-lg bg-indigo-50 px-4 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-100 transition-colors">
-                Download PDF
-              </button>
-            </div>
+            {viewRequest.status === 'approved' && (
+              <div className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700 font-medium">
+                ✓ This student is verified and active on the platform.
+              </div>
+            )}
+            {viewRequest.status === 'rejected' && (
+              <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700 font-medium">
+                ✗ This student's verification has been rejected.
+              </div>
+            )}
 
             {viewRequest.status === 'pending' ? (
               <div className="flex gap-2 pt-1">
-                <Button variant="success" className="flex-1" onClick={() => { handleAction(viewRequest.id, 'approved'); setViewRequest(null); }}>
-                  <CheckIcon className="h-4 w-4 mr-1" /> Approve
+                <Button
+                  variant="success"
+                  className="flex-1"
+                  disabled={!!actioning[viewRequest.id]}
+                  onClick={() => handleAction(viewRequest.id, 'approved')}
+                >
+                  <CheckIcon className="h-4 w-4 mr-1" />
+                  {actioning[viewRequest.id] === 'approving' ? 'Approving…' : 'Approve'}
                 </Button>
-                <Button variant="danger" className="flex-1" onClick={() => { handleAction(viewRequest.id, 'rejected'); setViewRequest(null); }}>
-                  <XMarkIcon className="h-4 w-4 mr-1" /> Reject
+                <Button
+                  variant="danger"
+                  className="flex-1"
+                  disabled={!!actioning[viewRequest.id]}
+                  onClick={() => handleAction(viewRequest.id, 'rejected')}
+                >
+                  <XMarkIcon className="h-4 w-4 mr-1" />
+                  {actioning[viewRequest.id] === 'rejecting' ? 'Rejecting…' : 'Reject'}
                 </Button>
               </div>
             ) : (

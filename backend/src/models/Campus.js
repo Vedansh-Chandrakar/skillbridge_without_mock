@@ -24,6 +24,13 @@ const campusSchema = new mongoose.Schema(
       enum: ['active', 'pending', 'inactive'],
       default: 'pending',
     },
+    // Profile fields
+    location:     { type: String, default: '' },
+    description:  { type: String, default: '' },
+    website:      { type: String, default: '' },
+    contactEmail: { type: String, default: '' },
+    contactPhone: { type: String, default: '' },
+    established:  { type: String, default: '' },
   },
   { timestamps: true }
 );

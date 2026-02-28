@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
-  PageHeader, Card, CardHeader, Badge, Avatar, Button, Modal, SearchInput,
+  PageHeader, Card, Badge, Avatar, Button, Modal, SearchInput,
   Table, TableHead, TableHeader, TableBody, TableRow, TableCell, EmptyState,
 } from '@/components/shared';
 import {
@@ -16,23 +16,48 @@ import {
   ArrowLeftIcon,
   PrinterIcon,
 } from '@heroicons/react/24/outline';
-
-const APPLICANT_DATA = {};
-const DEFAULT_DATA = { role: '', company: '', applicants: [] };
+import { CAMPUS_ENDPOINTS } from '@/config/api';
 
 const statusColor = { pending: 'yellow', shortlisted: 'blue', accepted: 'green', rejected: 'red' };
 
+const authHeaders = () => ({
+  'Content-Type': 'application/json',
+  Authorization: `Bearer ${localStorage.getItem('sb_token')}`,
+});
+
 export default function CompanyApplicantsPage() {
   const { oppId } = useParams();
-  const data = APPLICANT_DATA[oppId] || DEFAULT_DATA;
-  const roleTitle = data.role || 'Opportunity';
-  const companyTitle = data.company || '';
 
-  const [applicants, setApplicants] = useState(data.applicants);
-  const [search, setSearch] = useState('');
+  const [applicants, setApplicants]     = useState([]);
+  const [roleTitle, setRoleTitle]       = useState('Opportunity');
+  const [companyTitle, setCompanyTitle] = useState('');
+  const [loading, setLoading]           = useState(true);
+  const [error, setError]               = useState('');
+  const [actioningId, setActioningId]   = useState(null);
+
+  const [search, setSearch]             = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [previewApp, setPreviewApp] = useState(null);
+  const [previewApp, setPreviewApp]     = useState(null);
   const [showGenerateList, setShowGenerateList] = useState(false);
+
+  const fetchApplicants = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const res  = await fetch(CAMPUS_ENDPOINTS.APPLICANTS(oppId), { headers: authHeaders() });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.message || 'Failed to load applicants.');
+      setRoleTitle(json.role    || 'Opportunity');
+      setCompanyTitle(json.company || '');
+      setApplicants(json.data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [oppId]);
+
+  useEffect(() => { fetchApplicants(); }, [fetchApplicants]);
 
   const filtered = applicants.filter((a) => {
     const matchSearch = a.name.toLowerCase().includes(search.toLowerCase()) || a.email.toLowerCase().includes(search.toLowerCase());
@@ -40,9 +65,21 @@ export default function CompanyApplicantsPage() {
     return matchSearch && matchStatus;
   });
 
-  const handleStatus = (id, status) => {
-    setApplicants((prev) => prev.map((a) => a.id === id ? { ...a, status } : a));
-    if (previewApp?.id === id) setPreviewApp((p) => ({ ...p, status }));
+  const handleStatus = async (id, status) => {
+    setActioningId(id);
+    try {
+      const res  = await fetch(CAMPUS_ENDPOINTS.UPDATE_APPLICANT(oppId, id), {
+        method: 'PATCH', headers: authHeaders(), body: JSON.stringify({ status }),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.message || 'Update failed.');
+      setApplicants((prev) => prev.map((a) => a.id === id ? { ...a, status: json.data.status } : a));
+      if (previewApp?.id === id) setPreviewApp((p) => ({ ...p, status: json.data.status }));
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setActioningId(null);
+    }
   };
 
   const shortlisted = applicants.filter((a) => a.status === 'shortlisted' || a.status === 'accepted');
@@ -67,6 +104,17 @@ export default function CompanyApplicantsPage() {
           </Button>
         }
       />
+
+      {error && (
+        <div className="mb-4 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
+      )}
+
+      {loading ? (
+        <div className="flex items-center justify-center py-24">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent" />
+        </div>
+      ) : (
+      <>
 
       {/* Stats */}
       <div className="grid gap-4 sm:grid-cols-4 mb-6">
@@ -156,10 +204,10 @@ export default function CompanyApplicantsPage() {
                     <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
                       {(a.status === 'pending') && (
                         <>
-                          <button onClick={() => handleStatus(a.id, 'shortlisted')} className="rounded-lg p-1.5 text-gray-400 hover:bg-blue-50 hover:text-blue-600 transition-colors" title="Shortlist">
+                          <button onClick={() => handleStatus(a.id, 'shortlisted')} disabled={actioningId === a.id} className="rounded-lg p-1.5 text-gray-400 hover:bg-blue-50 hover:text-blue-600 transition-colors disabled:opacity-50" title="Shortlist">
                             <CheckCircleIcon className="h-4 w-4" />
                           </button>
-                          <button onClick={() => handleStatus(a.id, 'rejected')} className="rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors" title="Reject">
+                          <button onClick={() => handleStatus(a.id, 'rejected')} disabled={actioningId === a.id} className="rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors disabled:opacity-50" title="Reject">
                             <XCircleIcon className="h-4 w-4" />
                           </button>
                         </>
@@ -176,8 +224,10 @@ export default function CompanyApplicantsPage() {
         </Card>
       )}
 
-      {/* ── Applicant Preview Modal ── */}
-      <Modal open={!!previewApp} onClose={() => setPreviewApp(null)} title="Applicant Profile" size="lg">
+      </>
+      )}
+
+      {/* ── Applicant Preview Modal ── */}      <Modal open={!!previewApp} onClose={() => setPreviewApp(null)} title="Applicant Profile" size="lg">
         {previewApp && (
           <div className="space-y-5">
             <div className="flex items-start gap-4">
@@ -223,17 +273,17 @@ export default function CompanyApplicantsPage() {
             <div className="flex items-center gap-3 pt-2 border-t border-gray-100">
               {previewApp.status === 'pending' && (
                 <>
-                  <Button variant="gradient" className="flex-1" onClick={() => handleStatus(previewApp.id, 'shortlisted')}>
-                    <CheckCircleIcon className="h-4 w-4 mr-2" /> Shortlist
+                  <Button variant="gradient" className="flex-1" disabled={actioningId === previewApp.id} onClick={() => handleStatus(previewApp.id, 'shortlisted')}>
+                    <CheckCircleIcon className="h-4 w-4 mr-2" /> {actioningId === previewApp.id ? 'Saving…' : 'Shortlist'}
                   </Button>
-                  <Button variant="danger" className="flex-1" onClick={() => handleStatus(previewApp.id, 'rejected')}>
+                  <Button variant="danger" className="flex-1" disabled={actioningId === previewApp.id} onClick={() => handleStatus(previewApp.id, 'rejected')}>
                     <XCircleIcon className="h-4 w-4 mr-2" /> Reject
                   </Button>
                 </>
               )}
               {previewApp.status === 'shortlisted' && (
-                <Button variant="gradient" className="flex-1" onClick={() => handleStatus(previewApp.id, 'accepted')}>
-                  <CheckCircleIcon className="h-4 w-4 mr-2" /> Accept
+                <Button variant="gradient" className="flex-1" disabled={actioningId === previewApp.id} onClick={() => handleStatus(previewApp.id, 'accepted')}>
+                  <CheckCircleIcon className="h-4 w-4 mr-2" /> {actioningId === previewApp.id ? 'Saving…' : 'Accept'}
                 </Button>
               )}
               <Button variant="secondary" onClick={() => setPreviewApp(null)}>Close</Button>

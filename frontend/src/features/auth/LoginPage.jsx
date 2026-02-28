@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { useAuth } from '@/hooks';
 import { AUTH_ENDPOINTS } from '@/config/api';
 import {
   Mail, Lock, Eye, EyeOff, ArrowRight, ArrowLeft,
-  BriefcaseBusiness, User, Building2, ChevronDown,
+  BriefcaseBusiness, User, Building2, ChevronDown, Search, X, CheckCircle,
 } from 'lucide-react';
 
 /* ─── Shared input ─── */
@@ -74,6 +74,43 @@ export default function LoginPage() {
   const [showRegPw, setShowRegPw] = useState(false);
   const [regLoading, setRegLoading] = useState(false);
 
+  /* ── Campus dropdown state ── */
+  const [campusList, setCampusList]             = useState([]);
+  const [campusSearch, setCampusSearch]         = useState('');
+  const [campusOpen, setCampusOpen]             = useState(false);
+  const [selectedCampus, setSelectedCampus]     = useState(null); // { id, name, domain }
+  const [campusLoading, setCampusLoading]       = useState(false);
+  const campusRef = useRef(null);
+
+  /* ── Campus request state ── */
+  const [showCampusReq, setShowCampusReq]       = useState(false);
+  const [campusReqForm, setCampusReqForm]       = useState({ campusName: '', domain: '', contactEmail: '', message: '' });
+  const [campusReqLoading, setCampusReqLoading] = useState(false);
+  const [campusReqSuccess, setCampusReqSuccess] = useState(false);
+  const [campusReqError, setCampusReqError]     = useState('');
+
+  // Fetch active campuses when signup panel opens
+  useEffect(() => {
+    if (!isSignUp || campusList.length > 0) return;
+    setCampusLoading(true);
+    fetch(AUTH_ENDPOINTS.CAMPUSES)
+      .then((r) => r.json())
+      .then((d) => { if (d.success) setCampusList(d.data); })
+      .catch(() => {})
+      .finally(() => setCampusLoading(false));
+  }, [isSignUp, campusList.length]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handler = (e) => { if (campusRef.current && !campusRef.current.contains(e.target)) setCampusOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const filteredCampuses = campusList.filter((c) =>
+    c.name.toLowerCase().includes(campusSearch.toLowerCase())
+  );
+
   const handleRegChange = (e) => {
     setRegForm((p) => ({ ...p, [e.target.name]: e.target.value }));
     setRegErrors((p) => ({ ...p, [e.target.name]: '' }));
@@ -121,7 +158,7 @@ export default function LoginPage() {
     if (!regForm.email.trim()) errs.email = 'Required';
     if (regForm.password.length < 6) errs.password = 'Min 6 chars';
     if (regForm.password !== regForm.confirmPassword) errs.confirmPassword = "Don't match";
-    if (!regForm.campus.trim()) errs.campus = 'Required';
+    if (!selectedCampus) errs.campus = 'Select your campus from the list';
     setRegErrors(errs);
     if (Object.keys(errs).length) return;
     setRegLoading(true);
@@ -133,7 +170,7 @@ export default function LoginPage() {
           fullName: regForm.fullName.trim(),
           email: regForm.email.trim(),
           password: regForm.password,
-          campus: regForm.campus.trim(),
+          campus: selectedCampus.name,
           role: regForm.role,
           studentMode: regForm.studentMode,
         }),
@@ -146,6 +183,28 @@ export default function LoginPage() {
     } finally {
       setRegLoading(false);
     }
+  };
+
+  const handleCampusRequest = async (e) => {
+    e.preventDefault();
+    setCampusReqError(''); setCampusReqLoading(true);
+    try {
+      const res = await fetch(AUTH_ENDPOINTS.CAMPUS_REQUEST, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          campusName:   campusReqForm.campusName,
+          domain:       campusReqForm.domain,
+          contactEmail: campusReqForm.contactEmail,
+          requestedBy:  regForm.fullName,
+          message:      campusReqForm.message,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Request failed.');
+      setCampusReqSuccess(true);
+    } catch (err) { setCampusReqError(err.message); }
+    finally { setCampusReqLoading(false); }
   };
 
   /* CSS helper for form transitions */
@@ -303,7 +362,126 @@ export default function LoginPage() {
                 </div>
               </div>
 
-              <AuthInput icon={Building2} label="Campus / Institution" name="campus" required value={regForm.campus} onChange={handleRegChange} placeholder="e.g. MIT, Stanford" error={regErrors.campus} />
+              {/* ── Campus searchable dropdown ── */}
+              <div className="group relative" ref={campusRef}>
+                <label className="block text-xs font-semibold text-gray-600 mb-1.5 ml-1">Campus / Institution</label>
+
+                {/* Selected badge OR search input */}
+                {selectedCampus ? (
+                  <div className={`flex items-center justify-between rounded-2xl border px-4 py-3 text-sm bg-indigo-50 border-indigo-300`}>
+                    <span className="flex items-center gap-2 font-medium text-indigo-800">
+                      <Building2 className="h-4 w-4 text-indigo-500" />
+                      {selectedCampus.name}
+                      {selectedCampus.domain && <span className="text-xs text-indigo-400">{selectedCampus.domain}</span>}
+                    </span>
+                    <button type="button" onClick={() => { setSelectedCampus(null); setCampusSearch(''); setCampusOpen(true); }} className="text-indigo-400 hover:text-indigo-700 transition-colors">
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-[18px] w-[18px] text-gray-400" />
+                    <input
+                      type="text"
+                      value={campusSearch}
+                      onChange={(e) => { setCampusSearch(e.target.value); setCampusOpen(true); }}
+                      onFocus={() => setCampusOpen(true)}
+                      placeholder={campusLoading ? 'Loading campuses...' : 'Search your college...'}
+                      disabled={campusLoading}
+                      className={`w-full rounded-2xl border bg-gray-50/80 py-3 pl-11 pr-4 text-sm text-gray-900 placeholder:text-gray-400 outline-none transition-all duration-200 focus:bg-white focus:ring-4 hover:border-gray-300 ${
+                        regErrors.campus ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : 'border-gray-200 focus:border-indigo-400 focus:ring-indigo-100'
+                      }`}
+                    />
+                  </div>
+                )}
+
+                {/* Dropdown list */}
+                {campusOpen && !selectedCampus && (
+                  <div className="absolute z-50 mt-1.5 w-full rounded-2xl border border-gray-200 bg-white shadow-xl shadow-gray-200/60 overflow-hidden">
+                    <div className="max-h-44 overflow-y-auto">
+                      {filteredCampuses.length === 0 ? (
+                        <p className="px-4 py-3 text-xs text-gray-400">
+                          {campusSearch ? `No campus found for "${campusSearch}"` : 'No campuses available yet'}
+                        </p>
+                      ) : (
+                        filteredCampuses.map((c) => (
+                          <button
+                            key={String(c.id)}
+                            type="button"
+                            onClick={() => { setSelectedCampus(c); setCampusOpen(false); setCampusSearch(''); setRegErrors((p) => ({ ...p, campus: '' })); }}
+                            className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-indigo-50 transition-colors"
+                          >
+                            <Building2 className="h-4 w-4 text-indigo-400 shrink-0" />
+                            <span className="font-medium text-gray-800">{c.name}</span>
+                            {c.domain && <span className="text-xs text-gray-400 ml-auto">{c.domain}</span>}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                    {/* Not listed link */}
+                    <div className="border-t border-gray-100 px-4 py-2.5">
+                      <button
+                        type="button"
+                        onClick={() => { setCampusOpen(false); setShowCampusReq(true); setCampusReqForm((f) => ({ ...f, campusName: campusSearch })); }}
+                        className="text-xs font-semibold text-indigo-600 hover:text-indigo-500 transition-colors"
+                      >
+                        🏫 My college isn’t listed — Request to add it
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {regErrors.campus && <p className="mt-1 ml-1 text-xs text-red-500">{regErrors.campus}</p>}
+
+                {/* Not listed — request form (inline, shown below dropdown) */}
+                {!selectedCampus && !campusOpen && (
+                  <button
+                    type="button"
+                    onClick={() => setShowCampusReq(true)}
+                    className="mt-1 ml-1 text-xs text-indigo-500 hover:text-indigo-700 transition-colors font-medium"
+                  >
+                    Can’t find your college? Request it →
+                  </button>
+                )}
+              </div>
+
+              {/* ── Campus request inline form ── */}
+              {showCampusReq && (
+                <div className="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4 space-y-3">
+                  {campusReqSuccess ? (
+                    <div className="flex flex-col items-center gap-2 py-2 text-center">
+                      <CheckCircle className="h-8 w-8 text-green-500" />
+                      <p className="text-sm font-semibold text-gray-800">Request Sent!</p>
+                      <p className="text-xs text-gray-500">Admin will review and add your campus. You can register once it’s approved.</p>
+                      <button type="button" onClick={() => { setShowCampusReq(false); setCampusReqSuccess(false); setCampusReqForm({ campusName: '', domain: '', contactEmail: '', message: '' }); }} className="text-xs font-medium text-indigo-600 hover:text-indigo-500">Close</button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-semibold text-indigo-700">Request to add your campus</p>
+                        <button type="button" onClick={() => setShowCampusReq(false)} className="text-gray-400 hover:text-gray-600"><X className="h-4 w-4" /></button>
+                      </div>
+                      <input type="text" placeholder="College name *" value={campusReqForm.campusName}
+                        onChange={(e) => setCampusReqForm((f) => ({ ...f, campusName: e.target.value }))}
+                        className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100" />
+                      <input type="text" placeholder="Domain (e.g. mit.edu)" value={campusReqForm.domain}
+                        onChange={(e) => setCampusReqForm((f) => ({ ...f, domain: e.target.value }))}
+                        className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100" />
+                      <input type="email" placeholder="Your contact email *" value={campusReqForm.contactEmail}
+                        onChange={(e) => setCampusReqForm((f) => ({ ...f, contactEmail: e.target.value }))}
+                        className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100" />
+                      <textarea rows={2} placeholder="Any additional info (optional)" value={campusReqForm.message}
+                        onChange={(e) => setCampusReqForm((f) => ({ ...f, message: e.target.value }))}
+                        className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 resize-none" />
+                      {campusReqError && <p className="text-xs text-red-500">{campusReqError}</p>}
+                      <button type="button" onClick={handleCampusRequest} disabled={campusReqLoading || !campusReqForm.campusName.trim() || !campusReqForm.contactEmail.trim()}
+                        className="w-full rounded-xl bg-indigo-600 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60 transition-colors">
+                        {campusReqLoading ? 'Sending...' : 'Send Request'}
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
 
               <div className="group">
                 <label className="block text-xs font-semibold text-gray-600 mb-1.5 ml-1">I am registering as</label>

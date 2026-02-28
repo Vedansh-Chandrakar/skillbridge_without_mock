@@ -1,5 +1,6 @@
-const User   = require('../models/User');
-const Campus = require('../models/Campus');
+const User          = require('../models/User');
+const Campus        = require('../models/Campus');
+const CampusRequest = require('../models/CampusRequest');
 
 // ── Helper: map User → verification shape ─────────────
 const toVerification = (user) => {
@@ -187,6 +188,65 @@ const deleteCampus = async (req, res, next) => {
 
 
 /* ═══════════════════════════════════════════════════════
+   DASHBOARD STATS ENDPOINT
+═══════════════════════════════════════════════════════ */
+
+// GET /api/admin/dashboard
+const getDashboardStats = async (req, res, next) => {
+  try {
+    const [totalUsers, totalCampuses, pendingCount, activeCount, recentUsers] = await Promise.all([
+      User.countDocuments({ type: { $ne: 'admin' } }),
+      Campus.countDocuments(),
+      User.countDocuments({ status: 'pending' }),
+      User.countDocuments({ status: 'active', type: { $ne: 'admin' } }),
+      User.find({ type: { $ne: 'admin' } }).sort({ createdAt: -1 }).limit(6),
+    ]);
+
+    // Top campuses by student count
+    const campuses = await Campus.find().sort({ createdAt: -1 });
+    const studentCounts = await User.aggregate([
+      { $match: { type: 'student', isVerified: true } },
+      { $group: { _id: '$campus', count: { $sum: 1 } } },
+    ]);
+    const countMap = {};
+    studentCounts.forEach(({ _id, count }) => { if (_id) countMap[_id] = count; });
+    const topCampuses = campuses
+      .map((c) => ({ id: c._id, name: c.name, status: c.status, students: countMap[c.name] || 0 }))
+      .sort((a, b) => b.students - a.students)
+      .slice(0, 5);
+
+    // Recent activity list
+    const recentActivity = recentUsers.map((u) => ({
+      id:     u._id,
+      user:   u.name,
+      email:  u.email,
+      type:   u.type,
+      status: u.status,
+      action: u.status === 'pending' ? 'registered and is awaiting verification'
+             : u.status === 'active'  ? 'joined the platform'
+             : u.status === 'rejected' ? 'was rejected'
+             : 'account suspended',
+      time:   u.createdAt,
+    }));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        stats: [
+          { key: 'totalUsers',    label: 'Total Users',           value: totalUsers },
+          { key: 'campuses',      label: 'Campuses',              value: totalCampuses },
+          { key: 'pending',       label: 'Pending Verifications', value: pendingCount },
+          { key: 'activeUsers',   label: 'Active Users',          value: activeCount },
+        ],
+        recentActivity,
+        topCampuses,
+      },
+    });
+  } catch (error) { next(error); }
+};
+
+
+/* ═══════════════════════════════════════════════════════
    ADMIN PROFILE ENDPOINTS
 ═══════════════════════════════════════════════════════ */
 
@@ -243,13 +303,89 @@ const changeAdminPassword = async (req, res, next) => {
 };
 
 
+/* ═══════════════════════════════════════════════════════
+   CAMPUS REQUESTS (submitted via public register page)
+═══════════════════════════════════════════════════════ */
+
+// GET /api/admin/campus-requests
+const getCampusRequests = async (req, res, next) => {
+  try {
+    const requests = await CampusRequest.find().sort({ createdAt: -1 });
+    res.status(200).json({
+      success: true,
+      count: requests.length,
+      data: requests.map((r) => ({
+        id:           r._id,
+        campusName:   r.campusName,
+        domain:       r.domain,
+        contactEmail: r.contactEmail,
+        requestedBy:  r.requestedBy,
+        message:      r.message,
+        status:       r.status,
+        adminNote:    r.adminNote,
+        createdAt:    r.createdAt,
+      })),
+    });
+  } catch (err) { next(err); }
+};
+
+// PATCH /api/admin/campus-requests/:id/approve
+// Approves the request AND auto-creates the Campus if it doesn't exist
+const approveCampusRequest = async (req, res, next) => {
+  try {
+    const request = await CampusRequest.findById(req.params.id);
+    if (!request) return res.status(404).json({ success: false, message: 'Request not found.' });
+
+    // Create campus if not already present
+    let campus = await Campus.findOne({ name: { $regex: new RegExp(`^${request.campusName}$`, 'i') } });
+    if (!campus) {
+      campus = await Campus.create({
+        name:       request.campusName,
+        domain:     request.domain || 'unknown',
+        adminEmail: request.contactEmail,
+        status:     'active',
+      });
+    } else {
+      campus.status = 'active';
+      await campus.save();
+    }
+
+    request.status    = 'approved';
+    request.adminNote = req.body.adminNote || '';
+    await request.save();
+
+    res.status(200).json({
+      success: true,
+      message: `"${request.campusName}" has been approved and added as an active campus.`,
+    });
+  } catch (err) { next(err); }
+};
+
+// PATCH /api/admin/campus-requests/:id/reject
+const rejectCampusRequest = async (req, res, next) => {
+  try {
+    const request = await CampusRequest.findByIdAndUpdate(
+      req.params.id,
+      { status: 'rejected', adminNote: req.body.adminNote || '' },
+      { new: true }
+    );
+    if (!request) return res.status(404).json({ success: false, message: 'Request not found.' });
+    res.status(200).json({ success: true, message: `Request for "${request.campusName}" rejected.` });
+  } catch (err) { next(err); }
+};
+
+
 module.exports = {
+  // dashboard
+  getDashboardStats,
   // verifications
   getVerifications, approveUser, rejectUser,
   // users
   getUsers, updateUserStatus, deleteUser,
   // campuses
   getCampuses, addCampus, updateCampus, deleteCampus,
+  // campus requests
+  getCampusRequests, approveCampusRequest, rejectCampusRequest,
   // profile
   getAdminProfile, updateAdminProfile, changeAdminPassword,
 };

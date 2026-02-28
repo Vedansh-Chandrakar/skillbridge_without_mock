@@ -1,6 +1,6 @@
 const express = require('express');
 const { body } = require('express-validator');
-const { loginUser, registerUser } = require('../controllers/authController');
+const { loginUser, registerUser, getCampuses, requestCampus } = require('../controllers/authController');
 
 const router = express.Router();
 
@@ -48,5 +48,11 @@ router.post('/login', loginValidation, loginUser);
 
 // POST /api/auth/register
 router.post('/register', registerValidation, registerUser);
+
+// GET /api/auth/campuses  — public, used by registration dropdown
+router.get('/campuses', getCampuses);
+
+// POST /api/auth/campus-request  — public, request a campus to be added
+router.post('/campus-request', requestCampus);
 
 module.exports = router;

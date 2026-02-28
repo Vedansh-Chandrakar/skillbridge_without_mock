@@ -1,75 +1,121 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   PageHeader, Button, Badge, Avatar, Card, SearchInput, Modal,
   Table, TableHead, TableHeader, TableBody, TableRow, TableCell,
 } from '@/components/shared';
 import {
-  PlusIcon,
   EyeIcon,
   PencilSquareIcon,
   TrashIcon,
   EnvelopeIcon,
   CheckCircleIcon,
 } from '@heroicons/react/24/outline';
+import { CAMPUS_ENDPOINTS } from '@/config/api';
 
-const INITIAL_STUDENTS = [];
+const authHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('sb_token') || ''}`,
+});
 
 const modeColor = { Freelancer: 'blue', Recruiter: 'purple', Both: 'cyan' };
 
 export default function CampusStudentListPage() {
-  const [students, setStudents] = useState(INITIAL_STUDENTS);
-  const [search, setSearch] = useState('');
+  const [students, setStudents]       = useState([]);
+  const [loading, setLoading]         = useState(true);
+  const [error, setError]             = useState('');
+  const [search, setSearch]           = useState('');
   const [viewStudent, setViewStudent] = useState(null);
   const [editStudent, setEditStudent] = useState(null);
-  const [editForm, setEditForm] = useState({});
+  const [editForm, setEditForm]       = useState({});
+  const [editSaving, setEditSaving]   = useState(false);
+  const [editError, setEditError]     = useState('');
   const [deleteStudent, setDeleteStudent] = useState(null);
-  const [showInvite, setShowInvite] = useState(false);
-  const [inviteForm, setInviteForm] = useState({ email: '', mode: '', message: '' });
+  const [deleting, setDeleting]       = useState(false);
+  const [showInvite, setShowInvite]   = useState(false);
+  const [inviteForm, setInviteForm]   = useState({ email: '', mode: '', message: '' });
+  const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteSuccess, setInviteSuccess] = useState(false);
+  const [inviteError, setInviteError] = useState('');
+
+  // ── Fetch ──────────────────────────────────────────────
+  const fetchStudents = useCallback(async () => {
+    setLoading(true); setError('');
+    try {
+      const res  = await fetch(CAMPUS_ENDPOINTS.STUDENTS, { headers: authHeaders() });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to load students.');
+      setStudents(data.data);
+    } catch (err) { setError(err.message); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchStudents(); }, [fetchStudents]);
 
   const filtered = students.filter((s) =>
     s.name.toLowerCase().includes(search.toLowerCase()) ||
     s.email.toLowerCase().includes(search.toLowerCase()),
   );
 
+  // ── Edit ───────────────────────────────────────────────
   const openEdit = (s) => {
     setEditStudent(s);
+    setEditError('');
     setEditForm({ name: s.name, email: s.email, mode: s.mode, verified: s.verified });
   };
 
-  const handleEditSave = () => {
-    setStudents((prev) => prev.map((s) =>
-      s.id === editStudent.id ? { ...s, ...editForm } : s,
-    ));
-    setEditStudent(null);
+  const handleEditSave = async () => {
+    setEditSaving(true); setEditError('');
+    try {
+      const res  = await fetch(CAMPUS_ENDPOINTS.UPDATE_STUDENT(editStudent.id), {
+        method: 'PATCH', headers: authHeaders(),
+        body: JSON.stringify(editForm),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to update student.');
+      setStudents((prev) => prev.map((s) => String(s.id) === String(editStudent.id) ? data.data : s));
+      setEditStudent(null);
+    } catch (err) { setEditError(err.message); }
+    finally { setEditSaving(false); }
   };
 
-  const handleDelete = () => {
-    setStudents((prev) => prev.filter((s) => s.id !== deleteStudent.id));
-    setDeleteStudent(null);
+  // ── Delete ─────────────────────────────────────────────
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      const res  = await fetch(CAMPUS_ENDPOINTS.REMOVE_STUDENT(deleteStudent.id), {
+        method: 'DELETE', headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to remove student.');
+      setStudents((prev) => prev.filter((s) => String(s.id) !== String(deleteStudent.id)));
+      setDeleteStudent(null);
+    } catch (err) { alert(err.message); }
+    finally { setDeleting(false); }
   };
 
-  const handleInvite = (e) => {
+  // ── Invite ─────────────────────────────────────────────
+  const openInvite = () => {
+    setInviteForm({ email: '', mode: '', message: '' });
+    setInviteError('');
+    setInviteSuccess(false);
+    setShowInvite(true);
+  };
+
+  const handleInvite = async (e) => {
     e.preventDefault();
-    const name = inviteForm.email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-    const newStudent = {
-      id: Date.now(),
-      name,
-      email: inviteForm.email,
-      mode: inviteForm.mode || 'Freelancer',
-      skills: [],
-      gigs: 0,
-      rating: null,
-      verified: false,
-      joinedAt: new Date().toISOString().slice(0, 10),
-    };
-    setStudents((prev) => [newStudent, ...prev]);
-    setInviteSuccess(true);
-    setTimeout(() => {
-      setShowInvite(false);
-      setInviteForm({ email: '', mode: '', message: '' });
-      setInviteSuccess(false);
-    }, 1500);
+    setInviteLoading(true); setInviteError('');
+    try {
+      const res  = await fetch(CAMPUS_ENDPOINTS.INVITE_STUDENT, {
+        method: 'POST', headers: authHeaders(),
+        body: JSON.stringify(inviteForm),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to add student.');
+      setStudents((prev) => [data.data, ...prev]);
+      setInviteSuccess(true);
+      setTimeout(() => { setShowInvite(false); setInviteSuccess(false); }, 1600);
+    } catch (err) { setInviteError(err.message); }
+    finally { setInviteLoading(false); }
   };
 
   return (
@@ -78,7 +124,7 @@ export default function CampusStudentListPage() {
         title="Students"
         subtitle="Manage and monitor students in your campus."
         actions={
-          <Button variant="gradient" onClick={() => { setInviteForm({ email: '', mode: '', message: '' }); setInviteSuccess(false); setShowInvite(true); }}>
+          <Button variant="gradient" onClick={openInvite}>
             <EnvelopeIcon className="h-4 w-4 mr-2" />
             Invite Student
           </Button>
@@ -115,10 +161,23 @@ export default function CampusStudentListPage() {
             <TableHeader className="text-right">Actions</TableHeader>
           </TableHead>
           <TableBody>
-            {filtered.length === 0 ? (
+            {loading ? (
               <TableRow>
                 <TableCell colSpan={7} className="text-center py-10 text-sm text-gray-400">
-                  No students yet.
+                  Loading students…
+                </TableCell>
+              </TableRow>
+            ) : error ? (
+              <TableRow>
+                <TableCell colSpan={7} className="text-center py-10 text-sm text-red-500">
+                  {error}{' '}
+                  <button onClick={fetchStudents} className="underline ml-1">Retry</button>
+                </TableCell>
+              </TableRow>
+            ) : filtered.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={7} className="text-center py-10 text-sm text-gray-400">
+                  No students yet. Invite your first student!
                 </TableCell>
               </TableRow>
             ) : (
@@ -138,7 +197,7 @@ export default function CampusStudentListPage() {
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">
-                      {s.skills.length > 0 ? s.skills.slice(0, 3).map((sk) => (
+                      {s.skills && s.skills.length > 0 ? s.skills.slice(0, 3).map((sk) => (
                         <span key={sk} className="rounded-md bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">{sk}</span>
                       )) : <span className="text-xs text-gray-400">—</span>}
                     </div>
@@ -270,9 +329,12 @@ export default function CampusStudentListPage() {
               </select>
             </div>
             <div className="flex gap-2 pt-1">
-              <Button variant="gradient" onClick={handleEditSave}>Save Changes</Button>
+              <Button variant="gradient" onClick={handleEditSave} disabled={editSaving}>
+                {editSaving ? 'Saving…' : 'Save Changes'}
+              </Button>
               <Button variant="secondary" onClick={() => setEditStudent(null)}>Cancel</Button>
             </div>
+            {editError && <p className="text-xs text-red-500 mt-1">{editError}</p>}
           </div>
         )}
       </Modal>
@@ -290,7 +352,9 @@ export default function CampusStudentListPage() {
             </div>
             <p className="text-sm text-gray-600">Are you sure you want to remove this student? This action cannot be undone.</p>
             <div className="flex gap-2 pt-1">
-              <Button variant="danger" onClick={handleDelete}>Remove Student</Button>
+              <Button variant="danger" onClick={handleDelete} disabled={deleting}>
+                {deleting ? 'Removing…' : 'Remove Student'}
+              </Button>
               <Button variant="secondary" onClick={() => setDeleteStudent(null)}>Cancel</Button>
             </div>
           </div>
@@ -304,8 +368,8 @@ export default function CampusStudentListPage() {
             <div className="flex h-14 w-14 items-center justify-center rounded-full bg-green-100">
               <CheckCircleIcon className="h-8 w-8 text-green-600" />
             </div>
-            <p className="text-base font-semibold text-gray-900">Invite Sent!</p>
-            <p className="text-sm text-gray-500">Student has been added and notified.</p>
+            <p className="text-base font-semibold text-gray-900">Student Added!</p>
+            <p className="text-sm text-gray-500">They can now log in with the temporary password.</p>
           </div>
         ) : (
           <form className="space-y-4" onSubmit={handleInvite}>
@@ -343,9 +407,15 @@ export default function CampusStudentListPage() {
                 className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm placeholder:text-gray-400 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100"
               />
             </div>
+            {inviteError && <p className="text-xs text-red-500">{inviteError}</p>}
+            <div className="rounded-xl bg-amber-50 px-4 py-3 text-xs text-amber-700">
+              The student will be created with a temporary password: <span className="font-semibold">SkillBridge@2024</span>
+            </div>
             <div className="flex justify-end gap-3 pt-2">
               <Button variant="secondary" type="button" onClick={() => setShowInvite(false)}>Cancel</Button>
-              <Button type="submit">Send Invite</Button>
+              <Button type="submit" disabled={inviteLoading}>
+                {inviteLoading ? 'Adding…' : 'Add Student'}
+              </Button>
             </div>
           </form>
         )}

@@ -2,8 +2,9 @@ const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const connectDB = require('./src/config/db');
-const authRoutes = require('./src/routes/authRoutes');
-const adminRoutes = require('./src/routes/adminRoutes');
+const authRoutes   = require('./src/routes/authRoutes');
+const adminRoutes  = require('./src/routes/adminRoutes');
+const campusRoutes = require('./src/routes/campusRoutes');
 const errorHandler = require('./src/middleware/errorHandler');
 
 // Load env vars
@@ -24,8 +25,9 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // ── Routes ─────────────────────────────────────────────
-app.use('/api/auth',  authRoutes);
-app.use('/api/admin', adminRoutes);
+app.use('/api/auth',   authRoutes);
+app.use('/api/admin',  adminRoutes);
+app.use('/api/campus', campusRoutes);
 
 // ── Health check ───────────────────────────────────────
 app.get('/api/health', (req, res) => {

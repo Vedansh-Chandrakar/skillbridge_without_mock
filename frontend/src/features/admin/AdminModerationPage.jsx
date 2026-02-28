@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { PageHeader, Card, CardHeader, Badge, Button, Avatar, Modal } from '@/components/shared';
+import { ADMIN_ENDPOINTS } from '@/config/api';
 import {
   FlagIcon,
   ShieldExclamationIcon,
@@ -16,9 +17,22 @@ import {
   NoSymbolIcon,
 } from '@heroicons/react/24/outline';
 
-/* ── Backend-driven Data (empty until wired) ─────────── */
-const REPORTS = [];
-const ACTION_LOGS = [];
+/* ── Auth helper + utils ────────────────────────────────── */
+function timeAgo(dateStr) {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1)  return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+const authHeaders = (extra = {}) => ({
+  'Content-Type': 'application/json',
+  Authorization: `Bearer ${localStorage.getItem('sb_token') || ''}`,
+  ...extra,
+});
 
 const severityConfig = {
   high: { color: 'red', label: 'High', icon: ExclamationTriangleIcon },
@@ -62,43 +76,105 @@ const actionLogColors = {
 };
 
 export default function AdminModerationPage() {
-  const [reports, setReports] = useState(REPORTS);
-  const [filterStatus, setFilterStatus] = useState('all');
-  const [filterType, setFilterType] = useState('all');
-  const [search, setSearch] = useState('');
-  const [selectedReport, setSelectedReport] = useState(null);
-  const [actionModal, setActionModal] = useState(null);
-  const [actionNote, setActionNote] = useState('');
-  const [actionLogs, setActionLogs] = useState(ACTION_LOGS);
-  const [showBanModal, setShowBanModal] = useState(false);
-  const [showWarnModal, setShowWarnModal] = useState(false);
-  const [showMsgModal, setShowMsgModal] = useState(false);
-  const [overrideForm, setOverrideForm] = useState({ target: '', reason: '', message: '', severity: 'medium' });
+  const [reports,         setReports]         = useState([]);
+  const [moderationStats, setModerationStats] = useState([]);
+  const [filterStatus,    setFilterStatus]    = useState('all');
+  const [filterType,      setFilterType]      = useState('all');
+  const [search,          setSearch]          = useState('');
+  const [selectedReport,  setSelectedReport]  = useState(null);
+  const [actionModal,     setActionModal]     = useState(null);
+  const [actionNote,      setActionNote]      = useState('');
+  const [actionLogs,      setActionLogs]      = useState([]);
+  const [showBanModal,    setShowBanModal]    = useState(false);
+  const [showWarnModal,   setShowWarnModal]   = useState(false);
+  const [showMsgModal,    setShowMsgModal]    = useState(false);
+  const [overrideForm,    setOverrideForm]    = useState({ target: '', reason: '', message: '', severity: 'medium' });
   const [overrideSuccess, setOverrideSuccess] = useState('');
+  const [overrideError,   setOverrideError]   = useState('');
+  const [overrideLoading, setOverrideLoading] = useState(false);
+
+  // ── Fetch all data on mount ──
+  const fetchReports = useCallback(async () => {
+    const res  = await fetch(ADMIN_ENDPOINTS.MOD_REPORTS, { headers: authHeaders() });
+    const data = await res.json();
+    if (res.ok) setReports(data.data);
+  }, []);
+
+  const fetchLogs = useCallback(async () => {
+    const res  = await fetch(ADMIN_ENDPOINTS.MOD_LOGS, { headers: authHeaders() });
+    const data = await res.json();
+    if (res.ok) setActionLogs(data.data);
+  }, []);
+
+  const fetchStats = useCallback(async () => {
+    const res  = await fetch(ADMIN_ENDPOINTS.MOD_STATS, { headers: authHeaders() });
+    const data = await res.json();
+    if (res.ok) setModerationStats(data.data);
+  }, []);
+
+  useEffect(() => {
+    fetchReports();
+    fetchLogs();
+    fetchStats();
+  }, [fetchReports, fetchLogs, fetchStats]);
 
   const addLog = (action, type, target) => {
-    setActionLogs(prev => [{ id: `a-${Date.now()}`, admin: 'Super Admin', action, type, time: 'Just now', target }, ...prev]);
+    // Optimistically prepend; real logs refreshed after each API call
+    setActionLogs(prev => [{ id: `tmp-${Date.now()}`, admin: 'Admin', action, type, time: new Date().toISOString(), target }, ...prev]);
   };
 
-  const handleBanUser = () => {
+  const handleBanUser = async () => {
     if (!overrideForm.target.trim()) return;
-    addLog(`Banned user "${overrideForm.target}"`, 'ban', overrideForm.target);
-    setOverrideSuccess(`User "${overrideForm.target}" has been banned.`);
-    setTimeout(() => { setShowBanModal(false); setOverrideForm({ target: '', reason: '', message: '', severity: 'medium' }); setOverrideSuccess(''); }, 1500);
+    setOverrideLoading(true); setOverrideError(''); setOverrideSuccess('');
+    try {
+      const res  = await fetch(ADMIN_ENDPOINTS.MOD_BAN, {
+        method: 'POST', headers: authHeaders(),
+        body: JSON.stringify({ target: overrideForm.target, reason: overrideForm.reason }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to ban user.');
+      setOverrideSuccess(data.message);
+      addLog(`Banned user "${overrideForm.target}"`, 'ban', overrideForm.target);
+      fetchLogs(); fetchStats();
+      setTimeout(() => { setShowBanModal(false); setOverrideForm({ target: '', reason: '', message: '', severity: 'medium' }); setOverrideSuccess(''); }, 1500);
+    } catch (err) { setOverrideError(err.message); }
+    finally { setOverrideLoading(false); }
   };
 
-  const handleIssueWarning = () => {
+  const handleIssueWarning = async () => {
     if (!overrideForm.target.trim()) return;
-    addLog(`Warning issued to "${overrideForm.target}"`, 'warning', overrideForm.target);
-    setOverrideSuccess(`Warning issued to "${overrideForm.target}".`);
-    setTimeout(() => { setShowWarnModal(false); setOverrideForm({ target: '', reason: '', message: '', severity: 'medium' }); setOverrideSuccess(''); }, 1500);
+    setOverrideLoading(true); setOverrideError(''); setOverrideSuccess('');
+    try {
+      const res  = await fetch(ADMIN_ENDPOINTS.MOD_WARN, {
+        method: 'POST', headers: authHeaders(),
+        body: JSON.stringify({ target: overrideForm.target, message: overrideForm.message, severity: overrideForm.severity }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to issue warning.');
+      setOverrideSuccess(data.message);
+      addLog(`Warning issued to "${overrideForm.target}"`, 'warning', overrideForm.target);
+      fetchLogs(); fetchStats();
+      setTimeout(() => { setShowWarnModal(false); setOverrideForm({ target: '', reason: '', message: '', severity: 'medium' }); setOverrideSuccess(''); }, 1500);
+    } catch (err) { setOverrideError(err.message); }
+    finally { setOverrideLoading(false); }
   };
 
-  const handleMessageUser = () => {
+  const handleMessageUser = async () => {
     if (!overrideForm.target.trim() || !overrideForm.message.trim()) return;
-    addLog(`Message sent to "${overrideForm.target}"`, 'config', overrideForm.target);
-    setOverrideSuccess(`Message sent to "${overrideForm.target}".`);
-    setTimeout(() => { setShowMsgModal(false); setOverrideForm({ target: '', reason: '', message: '', severity: 'medium' }); setOverrideSuccess(''); }, 1500);
+    setOverrideLoading(true); setOverrideError(''); setOverrideSuccess('');
+    try {
+      const res  = await fetch(ADMIN_ENDPOINTS.MOD_MESSAGE, {
+        method: 'POST', headers: authHeaders(),
+        body: JSON.stringify({ target: overrideForm.target, message: overrideForm.message }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to send message.');
+      setOverrideSuccess(data.message);
+      addLog(`Message sent to "${overrideForm.target}"`, 'config', overrideForm.target);
+      fetchLogs();
+      setTimeout(() => { setShowMsgModal(false); setOverrideForm({ target: '', reason: '', message: '', severity: 'medium' }); setOverrideSuccess(''); }, 1500);
+    } catch (err) { setOverrideError(err.message); }
+    finally { setOverrideLoading(false); }
   };
 
   const filtered = reports.filter((r) => {
@@ -108,15 +184,22 @@ export default function AdminModerationPage() {
     return true;
   });
 
-  const handleAction = (reportId, action) => {
-    setReports((prev) => prev.map((r) =>
-      r.id === reportId
-        ? { ...r, status: action === 'resolve' ? 'resolved' : action === 'dismiss' ? 'dismissed' : r.status }
-        : r,
-    ));
-    setActionModal(null);
-    setSelectedReport(null);
-    setActionNote('');
+  const handleAction = async (reportId, action) => {
+    const endpoint = action === 'resolve'
+      ? ADMIN_ENDPOINTS.MOD_RESOLVE(reportId)
+      : ADMIN_ENDPOINTS.MOD_DISMISS(reportId);
+    try {
+      const res  = await fetch(endpoint, {
+        method: 'PATCH', headers: authHeaders(),
+        body: JSON.stringify({ adminNotes: actionNote }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message);
+      setReports((prev) => prev.map((r) => String(r.id) === String(reportId) ? data.data : r));
+      addLog(action === 'resolve' ? `Resolved report` : `Dismissed report`, action === 'resolve' ? 'resolve' : 'flag', reportId);
+      fetchLogs(); fetchStats();
+    } catch (err) { alert(err.message); }
+    setActionModal(null); setSelectedReport(null); setActionNote('');
   };
 
   const pendingCount = reports.filter((r) => r.status === 'pending').length;
@@ -203,7 +286,7 @@ export default function AdminModerationPage() {
                     <div className="flex items-center gap-4 mt-2 text-xs text-gray-400">
                       <span>Reported by: <span className="font-medium text-gray-600">{r.reporter}</span> ({r.reporterCampus})</span>
                       <span>Against: <span className="font-medium text-gray-600">{r.target}</span></span>
-                      <span>{r.createdAt}</span>
+                      <span>{timeAgo(r.createdAt)}</span>
                     </div>
                   </div>
                   <Badge color={st.color} dot size="sm">{st.label}</Badge>
@@ -240,7 +323,7 @@ export default function AdminModerationPage() {
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="text-xs text-gray-700">{log.action}</p>
-                        <p className="text-[10px] text-gray-400 mt-0.5">by {log.admin} &bull; {log.time}</p>
+                        <p className="text-[10px] text-gray-400 mt-0.5">by {log.admin} &bull; {timeAgo(log.time)}</p>
                       </div>
                     </div>
                   );
@@ -253,19 +336,16 @@ export default function AdminModerationPage() {
           <Card>
             <CardHeader title="Moderation Stats" subtitle="Last 30 days" />
             <div className="mt-4 space-y-3">
-              {[
-                { label: 'Reports Received', value: 42, color: 'text-indigo-600' },
-                { label: 'Reports Resolved', value: 38, color: 'text-green-600' },
-                { label: 'Users Banned', value: 3, color: 'text-red-600' },
-                { label: 'Gigs Removed', value: 7, color: 'text-amber-600' },
-                { label: 'Warnings Issued', value: 12, color: 'text-orange-600' },
-                { label: 'Avg Resolution Time', value: '4.2h', color: 'text-blue-600' },
-              ].map((s) => (
-                <div key={s.label} className="flex items-center justify-between">
-                  <span className="text-xs text-gray-600">{s.label}</span>
-                  <span className={`text-sm font-bold ${s.color}`}>{s.value}</span>
-                </div>
-              ))}
+              {moderationStats.length === 0 ? (
+                <p className="text-xs text-gray-400">Loading stats...</p>
+              ) : (
+                moderationStats.map((s) => (
+                  <div key={s.label} className="flex items-center justify-between">
+                    <span className="text-xs text-gray-600">{s.label}</span>
+                    <span className={`text-sm font-bold ${s.color}`}>{s.value}</span>
+                  </div>
+                ))
+              )}
             </div>
           </Card>
 
@@ -318,14 +398,20 @@ export default function AdminModerationPage() {
             />
           </div>
           {overrideSuccess && (
-            <div className="rounded-xl bg-green-50 px-4 py-3 flex items-center gap-2">
-              <CheckCircleIcon className="h-5 w-5 text-green-500" />
-              <p className="text-sm text-green-700 font-medium">{overrideSuccess}</p>
-            </div>
-          )}
+              <div className="rounded-xl bg-green-50 px-4 py-3 flex items-center gap-2">
+                <CheckCircleIcon className="h-5 w-5 text-green-500" />
+                <p className="text-sm text-green-700 font-medium">{overrideSuccess}</p>
+              </div>
+            )}
+            {overrideError && (
+              <div className="rounded-xl bg-red-50 px-4 py-3 flex items-center gap-2">
+                <XCircleIcon className="h-5 w-5 text-red-500" />
+                <p className="text-sm text-red-700 font-medium">{overrideError}</p>
+              </div>
+            )}
           <div className="flex gap-2 pt-1">
-            <Button variant="danger" onClick={handleBanUser} disabled={!overrideForm.target.trim()}>
-              <NoSymbolIcon className="h-4 w-4 mr-1" /> Confirm Ban
+            <Button variant="danger" onClick={handleBanUser} disabled={!overrideForm.target.trim() || overrideLoading}>
+              <NoSymbolIcon className="h-4 w-4 mr-1" /> {overrideLoading ? 'Banning...' : 'Confirm Ban'}
             </Button>
             <Button variant="secondary" onClick={() => setShowBanModal(false)}>Cancel</Button>
           </div>
@@ -368,14 +454,20 @@ export default function AdminModerationPage() {
             />
           </div>
           {overrideSuccess && (
-            <div className="rounded-xl bg-green-50 px-4 py-3 flex items-center gap-2">
-              <CheckCircleIcon className="h-5 w-5 text-green-500" />
-              <p className="text-sm text-green-700 font-medium">{overrideSuccess}</p>
-            </div>
-          )}
+              <div className="rounded-xl bg-green-50 px-4 py-3 flex items-center gap-2">
+                <CheckCircleIcon className="h-5 w-5 text-green-500" />
+                <p className="text-sm text-green-700 font-medium">{overrideSuccess}</p>
+              </div>
+            )}
+            {overrideError && (
+              <div className="rounded-xl bg-red-50 px-4 py-3 flex items-center gap-2">
+                <XCircleIcon className="h-5 w-5 text-red-500" />
+                <p className="text-sm text-red-700 font-medium">{overrideError}</p>
+              </div>
+            )}
           <div className="flex gap-2 pt-1">
-            <Button variant="primary" onClick={handleIssueWarning} disabled={!overrideForm.target.trim()} className="bg-amber-600 hover:bg-amber-700 shadow-amber-200">
-              <ExclamationTriangleIcon className="h-4 w-4 mr-1" /> Issue Warning
+            <Button variant="primary" onClick={handleIssueWarning} disabled={!overrideForm.target.trim() || overrideLoading} className="bg-amber-600 hover:bg-amber-700 shadow-amber-200">
+              <ExclamationTriangleIcon className="h-4 w-4 mr-1" /> {overrideLoading ? 'Sending...' : 'Issue Warning'}
             </Button>
             <Button variant="secondary" onClick={() => setShowWarnModal(false)}>Cancel</Button>
           </div>
@@ -406,14 +498,20 @@ export default function AdminModerationPage() {
             />
           </div>
           {overrideSuccess && (
-            <div className="rounded-xl bg-green-50 px-4 py-3 flex items-center gap-2">
-              <CheckCircleIcon className="h-5 w-5 text-green-500" />
-              <p className="text-sm text-green-700 font-medium">{overrideSuccess}</p>
-            </div>
-          )}
+              <div className="rounded-xl bg-green-50 px-4 py-3 flex items-center gap-2">
+                <CheckCircleIcon className="h-5 w-5 text-green-500" />
+                <p className="text-sm text-green-700 font-medium">{overrideSuccess}</p>
+              </div>
+            )}
+            {overrideError && (
+              <div className="rounded-xl bg-red-50 px-4 py-3 flex items-center gap-2">
+                <XCircleIcon className="h-5 w-5 text-red-500" />
+                <p className="text-sm text-red-700 font-medium">{overrideError}</p>
+              </div>
+            )}
           <div className="flex gap-2 pt-1">
-            <Button variant="primary" onClick={handleMessageUser} disabled={!overrideForm.target.trim() || !overrideForm.message.trim()}>
-              <ChatBubbleLeftRightIcon className="h-4 w-4 mr-1" /> Send Message
+            <Button variant="primary" onClick={handleMessageUser} disabled={!overrideForm.target.trim() || !overrideForm.message.trim() || overrideLoading}>
+              <ChatBubbleLeftRightIcon className="h-4 w-4 mr-1" /> {overrideLoading ? 'Sending...' : 'Send Message'}
             </Button>
             <Button variant="secondary" onClick={() => setShowMsgModal(false)}>Cancel</Button>
           </div>

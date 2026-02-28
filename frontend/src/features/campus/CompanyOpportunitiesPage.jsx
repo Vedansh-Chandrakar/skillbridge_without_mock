@@ -1,8 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  PageHeader, Card, CardHeader, Badge, Button, Modal, Input, Textarea, SearchInput, EmptyState,
-  Table, TableHead, TableHeader, TableBody, TableRow, TableCell,
+  PageHeader, Card, Badge, Button, Modal, Input, Textarea, SearchInput, EmptyState,
 } from '@/components/shared';
 import {
   BuildingOffice2Icon,
@@ -16,50 +15,99 @@ import {
   UserGroupIcon,
   CheckCircleIcon,
 } from '@heroicons/react/24/outline';
-
-const OPPORTUNITIES = [];
+import { CAMPUS_ENDPOINTS } from '@/config/api';
 
 const typeColor = { Internship: 'blue', 'Full-time': 'green', Contract: 'purple', 'Part-time': 'amber' };
 const statusColor = { active: 'green', closed: 'gray', draft: 'yellow' };
 
+const authHeaders = () => ({
+  'Content-Type': 'application/json',
+  Authorization: `Bearer ${localStorage.getItem('sb_token')}`,
+});
+
 export default function CompanyOpportunitiesPage() {
-  const [opportunities, setOpportunities] = useState(OPPORTUNITIES);
-  const [search, setSearch] = useState('');
-  const [typeFilter, setTypeFilter] = useState('all');
+  const [opportunities, setOpportunities] = useState([]);
+  const [loading, setLoading]             = useState(true);
+  const [error, setError]                 = useState('');
+  const [saving, setSaving]               = useState(false);
+  const [deletingId, setDeletingId]       = useState(null);
+
+  const [search, setSearch]               = useState('');
+  const [typeFilter, setTypeFilter]       = useState('all');
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [deleteOpp, setDeleteOpp] = useState(null);
-  const [editOpp, setEditOpp] = useState(null);
-  const [editForm, setEditForm] = useState({});
-  const [form, setForm] = useState({
-    company: '', role: '', type: 'Internship', location: '', salary: '', description: '', requirements: '', deadline: '',
+  const [deleteOpp, setDeleteOpp]         = useState(null);
+  const [editOpp, setEditOpp]             = useState(null);
+  const [editForm, setEditForm]           = useState({});
+  const [form, setForm]                   = useState({
+    company: '', role: '', type: 'Internship', location: '', salary: '',
+    description: '', requirements: '', deadline: '',
   });
+
+  const fetchOpportunities = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const res  = await fetch(CAMPUS_ENDPOINTS.OPPORTUNITIES, { headers: authHeaders() });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.message || 'Failed to load opportunities.');
+      setOpportunities(json.data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchOpportunities(); }, [fetchOpportunities]);
 
   const filtered = opportunities.filter((o) => {
     const matchSearch = o.company.toLowerCase().includes(search.toLowerCase()) || o.role.toLowerCase().includes(search.toLowerCase());
     const matchType = typeFilter === 'all' || o.type === typeFilter;
     return matchSearch && matchType;
   });
-  const totalApplicants = opportunities.reduce((total, opp) => total + opp.applicants, 0);
+  const totalApplicants = opportunities.reduce((total, opp) => total + (opp.applicants || 0), 0);
   const avgApplicants = opportunities.length ? Math.round(totalApplicants / opportunities.length) : 0;
   const isEmpty = opportunities.length === 0;
 
-  const handleCreate = () => {
-    const newOpp = {
-      id: `opp-${Date.now()}`,
-      ...form,
-      requirements: form.requirements.split(',').map((r) => r.trim()).filter(Boolean),
-      postedAt: new Date().toISOString().split('T')[0],
-      applicants: 0,
-      status: 'active',
-    };
-    setOpportunities((prev) => [newOpp, ...prev]);
-    setShowCreateModal(false);
-    setForm({ company: '', role: '', type: 'Internship', location: '', salary: '', description: '', requirements: '', deadline: '' });
+  const handleCreate = async () => {
+    if (!form.company || !form.role) return;
+    setSaving(true);
+    try {
+      const body = {
+        ...form,
+        requirements: form.requirements.split(',').map((r) => r.trim()).filter(Boolean),
+      };
+      const res  = await fetch(CAMPUS_ENDPOINTS.OPPORTUNITIES, {
+        method: 'POST', headers: authHeaders(), body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.message || 'Failed to create opportunity.');
+      setOpportunities((prev) => [json.data, ...prev]);
+      setShowCreateModal(false);
+      setForm({ company: '', role: '', type: 'Internship', location: '', salary: '', description: '', requirements: '', deadline: '' });
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleDelete = () => {
-    setOpportunities((prev) => prev.filter((o) => o.id !== deleteOpp.id));
-    setDeleteOpp(null);
+  const handleDelete = async () => {
+    if (!deleteOpp) return;
+    setDeletingId(deleteOpp.id);
+    try {
+      const res  = await fetch(CAMPUS_ENDPOINTS.DELETE_OPPORTUNITY(deleteOpp.id), {
+        method: 'DELETE', headers: authHeaders(),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.message || 'Delete failed.');
+      setOpportunities((prev) => prev.filter((o) => o.id !== deleteOpp.id));
+      setDeleteOpp(null);
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   const openEdit = (opp) => {
@@ -68,18 +116,31 @@ export default function CompanyOpportunitiesPage() {
       company: opp.company, role: opp.role, type: opp.type,
       location: opp.location, salary: opp.salary,
       description: opp.description,
-      requirements: opp.requirements.join(', '),
+      requirements: (opp.requirements || []).join(', '),
       deadline: opp.deadline, status: opp.status,
     });
   };
 
-  const handleEditSave = () => {
-    setOpportunities((prev) => prev.map((o) =>
-      o.id === editOpp.id
-        ? { ...o, ...editForm, requirements: editForm.requirements.split(',').map((r) => r.trim()).filter(Boolean) }
-        : o,
-    ));
-    setEditOpp(null);
+  const handleEditSave = async () => {
+    if (!editForm.company || !editForm.role) return;
+    setSaving(true);
+    try {
+      const body = {
+        ...editForm,
+        requirements: editForm.requirements.split(',').map((r) => r.trim()).filter(Boolean),
+      };
+      const res  = await fetch(CAMPUS_ENDPOINTS.UPDATE_OPPORTUNITY(editOpp.id), {
+        method: 'PATCH', headers: authHeaders(), body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.message || 'Update failed.');
+      setOpportunities((prev) => prev.map((o) => o.id === editOpp.id ? json.data : o));
+      setEditOpp(null);
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -93,6 +154,16 @@ export default function CompanyOpportunitiesPage() {
           </Button>
         }
       />
+
+      {error && (
+        <div className="mb-4 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
+      )}
+
+      {loading ? (
+        <div className="flex items-center justify-center py-24">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent" />
+        </div>
+      ) : (<>
 
       {/* Stats */}
       <div className="grid gap-4 sm:grid-cols-4 mb-6">
@@ -196,6 +267,8 @@ export default function CompanyOpportunitiesPage() {
         </div>
       )}
 
+      </>)}
+
       {/* ── Create Opportunity Modal ── */}
       <Modal open={showCreateModal} onClose={() => setShowCreateModal(false)} title="Post Company Opportunity" size="lg">
         <div className="space-y-4">
@@ -218,10 +291,10 @@ export default function CompanyOpportunitiesPage() {
           <Textarea label="Description" rows={3} placeholder="Describe the opportunity..." value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />
           <Input label="Requirements (comma-separated)" placeholder="React, TypeScript, Git" value={form.requirements} onChange={(e) => setForm((f) => ({ ...f, requirements: e.target.value }))} />
           <div className="flex gap-3 pt-2">
-            <Button variant="gradient" className="flex-1" onClick={handleCreate} disabled={!form.company || !form.role}>
-              <PlusIcon className="h-4 w-4 mr-2" /> Post Opportunity
+            <Button variant="gradient" className="flex-1" onClick={handleCreate} disabled={!form.company || !form.role || saving}>
+              <PlusIcon className="h-4 w-4 mr-2" /> {saving ? 'Posting…' : 'Post Opportunity'}
             </Button>
-            <Button variant="secondary" onClick={() => setShowCreateModal(false)}>Cancel</Button>
+            <Button variant="secondary" onClick={() => setShowCreateModal(false)} disabled={saving}>Cancel</Button>
           </div>
         </div>
       </Modal>
@@ -278,8 +351,8 @@ export default function CompanyOpportunitiesPage() {
               </select>
             </div>
             <div className="flex gap-3 pt-2">
-              <Button variant="gradient" className="flex-1" onClick={handleEditSave} disabled={!editForm.company || !editForm.role}>Save Changes</Button>
-              <Button variant="secondary" onClick={() => setEditOpp(null)}>Cancel</Button>
+              <Button variant="gradient" className="flex-1" onClick={handleEditSave} disabled={!editForm.company || !editForm.role || saving}>{saving ? 'Saving…' : 'Save Changes'}</Button>
+              <Button variant="secondary" onClick={() => setEditOpp(null)} disabled={saving}>Cancel</Button>
             </div>
           </div>
         )}
@@ -291,8 +364,8 @@ export default function CompanyOpportunitiesPage() {
           <div className="space-y-4">
             <p className="text-sm text-gray-600">Delete <strong>{deleteOpp.role}</strong> at <strong>{deleteOpp.company}</strong>? This will also remove all applicant data.</p>
             <div className="flex gap-3">
-              <Button variant="danger" className="flex-1" onClick={handleDelete}>Yes, Delete</Button>
-              <Button variant="secondary" className="flex-1" onClick={() => setDeleteOpp(null)}>Cancel</Button>
+              <Button variant="danger" className="flex-1" onClick={handleDelete} disabled={!!deletingId}>{deletingId ? 'Deleting…' : 'Yes, Delete'}</Button>
+              <Button variant="secondary" className="flex-1" onClick={() => setDeleteOpp(null)} disabled={!!deletingId}>Cancel</Button>
             </div>
           </div>
         )}

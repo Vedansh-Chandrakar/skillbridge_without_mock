@@ -1,50 +1,66 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   PageHeader, Button, Badge, Avatar, SearchInput, Card, Modal, Input,
   Table, TableHead, TableHeader, TableBody, TableRow, TableCell,
 } from '@/components/shared';
 import { PlusIcon, PencilSquareIcon, TrashIcon, EyeIcon, XMarkIcon } from '@heroicons/react/24/outline';
-
-const CAMPUSES = [];
+import { ADMIN_ENDPOINTS } from '@/config/api';
 
 const statusColor = { active: 'green', pending: 'yellow', inactive: 'gray' };
 
+const authHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('sb_token') || ''}`,
+});
+
 export default function CampusManagementPage() {
-  const [campuses, setCampuses] = useState(CAMPUSES);
-  const [search, setSearch] = useState('');
-
-  // Add modal
+  const [campuses, setCampuses]     = useState([]);
+  const [loading, setLoading]       = useState(true);
+  const [error, setError]           = useState('');
+  const [search, setSearch]         = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
-  const [form, setForm] = useState({ name: '', domain: '', adminEmail: '' });
-
-  // View modal
+  const [form, setForm]             = useState({ name: '', domain: '', adminEmail: '' });
+  const [formError, setFormError]   = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const [viewCampus, setViewCampus] = useState(null);
-
-  // Edit modal
   const [editCampus, setEditCampus] = useState(null);
-  const [editForm, setEditForm] = useState({});
-
-  // Delete confirm
+  const [editForm, setEditForm]     = useState({});
   const [deleteCampus, setDeleteCampus] = useState(null);
+
+  // ── Fetch ──
+  const fetchCampuses = useCallback(async () => {
+    setLoading(true); setError('');
+    try {
+      const res  = await fetch(ADMIN_ENDPOINTS.CAMPUSES, { headers: authHeaders() });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to load campuses.');
+      setCampuses(data.data);
+    } catch (err) { setError(err.message); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchCampuses(); }, [fetchCampuses]);
 
   const filtered = campuses.filter((c) =>
     c.name.toLowerCase().includes(search.toLowerCase()),
   );
 
   /* ── Add ── */
-  const handleAdd = (e) => {
+  const handleAdd = async (e) => {
     e.preventDefault();
-    setCampuses((prev) => [{
-      id: `c-${Date.now()}`,
-      name: form.name,
-      domain: form.domain,
-      students: 0,
-      gigs: 0,
-      status: 'pending',
-      joinedAt: new Date().toISOString().split('T')[0],
-    }, ...prev]);
-    setForm({ name: '', domain: '', adminEmail: '' });
-    setShowAddModal(false);
+    setFormError(''); setSubmitting(true);
+    try {
+      const res  = await fetch(ADMIN_ENDPOINTS.CAMPUSES, {
+        method: 'POST', headers: authHeaders(),
+        body: JSON.stringify(form),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to add campus.');
+      setCampuses((prev) => [data.data, ...prev]);
+      setForm({ name: '', domain: '', adminEmail: '' });
+      setShowAddModal(false);
+    } catch (err) { setFormError(err.message); }
+    finally { setSubmitting(false); }
   };
 
   /* ── Edit ── */
@@ -52,18 +68,31 @@ export default function CampusManagementPage() {
     setEditCampus(campus);
     setEditForm({ name: campus.name, domain: campus.domain, status: campus.status });
   };
-  const handleEdit = (e) => {
+  const handleEdit = async (e) => {
     e.preventDefault();
-    setCampuses((prev) =>
-      prev.map((c) => c.id === editCampus.id ? { ...c, ...editForm } : c),
-    );
-    setEditCampus(null);
+    try {
+      const res  = await fetch(ADMIN_ENDPOINTS.UPDATE_CAMPUS(editCampus.id), {
+        method: 'PATCH', headers: authHeaders(),
+        body: JSON.stringify(editForm),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to update campus.');
+      setCampuses((prev) => prev.map((c) => String(c.id) === String(editCampus.id) ? data.data : c));
+      setEditCampus(null);
+    } catch (err) { alert(err.message); }
   };
 
   /* ── Delete ── */
-  const handleDelete = () => {
-    setCampuses((prev) => prev.filter((c) => c.id !== deleteCampus.id));
-    setDeleteCampus(null);
+  const handleDelete = async () => {
+    try {
+      const res  = await fetch(ADMIN_ENDPOINTS.DELETE_CAMPUS(deleteCampus.id), {
+        method: 'DELETE', headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to delete campus.');
+      setCampuses((prev) => prev.filter((c) => String(c.id) !== String(deleteCampus.id)));
+      setDeleteCampus(null);
+    } catch (err) { alert(err.message); }
   };
 
   return (
@@ -95,17 +124,21 @@ export default function CampusManagementPage() {
           <TableHead>
             <TableHeader>Campus</TableHeader>
             <TableHeader>Domain</TableHeader>
+            <TableHeader>Admin Email</TableHeader>
             <TableHeader>Students</TableHeader>
-            <TableHeader>Gigs</TableHeader>
             <TableHeader>Status</TableHeader>
             <TableHeader>Joined</TableHeader>
             <TableHeader className="text-right">Actions</TableHeader>
           </TableHead>
           <TableBody>
-            {filtered.length === 0 ? (
+            {loading ? (
+              <TableRow><TableCell colSpan={7} className="text-center py-10 text-sm text-gray-400">Loading campuses...</TableCell></TableRow>
+            ) : error ? (
+              <TableRow><TableCell colSpan={7} className="text-center py-10 text-sm text-red-500">{error} <button onClick={fetchCampuses} className="underline ml-1">Retry</button></TableCell></TableRow>
+            ) : filtered.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} className="text-center py-10 text-sm text-gray-400">
-                  No campuses yet. Connect the backend to populate this list.
+                  No campuses found.
                 </TableCell>
               </TableRow>
             ) : (
@@ -118,8 +151,8 @@ export default function CampusManagementPage() {
                     </div>
                   </TableCell>
                   <TableCell className="text-gray-500">{campus.domain}</TableCell>
-                  <TableCell>{campus.students.toLocaleString()}</TableCell>
-                  <TableCell>{campus.gigs}</TableCell>
+                  <TableCell className="text-gray-500">{campus.adminEmail}</TableCell>
+                  <TableCell>{campus.students?.toLocaleString() ?? 0}</TableCell>
                   <TableCell>
                     <Badge color={statusColor[campus.status]} dot>{campus.status}</Badge>
                   </TableCell>
@@ -167,9 +200,10 @@ export default function CampusManagementPage() {
             onChange={(e) => setForm((f) => ({ ...f, domain: e.target.value }))} required />
           <Input label="Admin Email" type="email" placeholder="admin@mit.edu" value={form.adminEmail}
             onChange={(e) => setForm((f) => ({ ...f, adminEmail: e.target.value }))} required />
+          {formError && <p className="text-xs text-red-500">{formError}</p>}
           <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
             <Button variant="secondary" type="button" onClick={() => setShowAddModal(false)}>Cancel</Button>
-            <Button type="submit">Add Campus</Button>
+            <Button type="submit" disabled={submitting}>{submitting ? 'Adding...' : 'Add Campus'}</Button>
           </div>
         </form>
       </Modal>
@@ -187,8 +221,8 @@ export default function CampusManagementPage() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               {[
-                { label: 'Students', value: viewCampus.students.toLocaleString() },
-                { label: 'Active Gigs', value: viewCampus.gigs },
+                { label: 'Admin Email', value: viewCampus.adminEmail },
+                { label: 'Students', value: viewCampus.students?.toLocaleString() ?? 0 },
                 { label: 'Status', value: <Badge color={statusColor[viewCampus.status]} dot>{viewCampus.status}</Badge> },
                 { label: 'Joined', value: new Date(viewCampus.joinedAt).toLocaleDateString() },
               ].map(({ label, value }) => (

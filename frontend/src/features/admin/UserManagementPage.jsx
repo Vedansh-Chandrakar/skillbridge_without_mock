@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   PageHeader, Button, Badge, Avatar, SearchInput, Card, Tabs, Modal,
   Table, TableHead, TableHeader, TableBody, TableRow, TableCell,
@@ -7,12 +7,16 @@ import {
   FunnelIcon, XMarkIcon, ShieldExclamationIcon,
   CheckCircleIcon, TrashIcon, EyeIcon,
 } from '@heroicons/react/24/outline';
-
-const INITIAL_USERS = [];
+import { ADMIN_ENDPOINTS } from '@/config/api';
 
 const roleColor   = { student: 'indigo', campus: 'blue',   admin: 'purple' };
 const statusColor = { active: 'green',   suspended: 'red', pending: 'yellow' };
 const modeColor   = { freelancer: 'cyan', recruiter: 'purple', both: 'indigo' };
+
+const authHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('sb_token') || ''}`,
+});
 
 /* ── Manage modal ─────────────────────────────────────── */
 function ManageModal({ user, onClose, onUpdate, onDelete }) {
@@ -193,19 +197,55 @@ function UserTable({ users, onManage }) {
 
 /* ── Page ─────────────────────────────────────────────── */
 export default function UserManagementPage() {
-  const [users, setUsers] = useState(INITIAL_USERS);
-  const [search, setSearch] = useState('');
+  const [users, setUsers]               = useState([]);
+  const [loading, setLoading]           = useState(true);
+  const [error, setError]               = useState('');
+  const [search, setSearch]             = useState('');
   const [managingUser, setManagingUser] = useState(null);
-  const [showFilter, setShowFilter] = useState(false);
-  const [filters, setFilters] = useState({ role: 'all', status: 'all', mode: 'all' });
+  const [showFilter, setShowFilter]     = useState(false);
+  const [filters, setFilters]           = useState({ role: 'all', status: 'all', mode: 'all' });
+
+  // ── Fetch ──
+  const fetchUsers = useCallback(async () => {
+    setLoading(true); setError('');
+    try {
+      const res  = await fetch(ADMIN_ENDPOINTS.USERS, { headers: authHeaders() });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to load users.');
+      setUsers(data.data);
+    } catch (err) { setError(err.message); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchUsers(); }, [fetchUsers]);
 
   const handleFilterChange = (key, value) => setFilters((f) => ({ ...f, [key]: value }));
   const resetFilters = () => setFilters({ role: 'all', status: 'all', mode: 'all' });
 
-  const handleUpdate = (id, changes) =>
-    setUsers((prev) => prev.map((u) => u.id === id ? { ...u, ...changes } : u));
+  // ── Suspend / Re-activate ──
+  const handleUpdate = async (id, changes) => {
+    try {
+      const res  = await fetch(ADMIN_ENDPOINTS.UPDATE_USER(id), {
+        method: 'PATCH', headers: authHeaders(),
+        body: JSON.stringify(changes),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to update user.');
+      setUsers((prev) => prev.map((u) => String(u.id) === String(id) ? data.data : u));
+    } catch (err) { alert(err.message); }
+  };
 
-  const handleDelete = (id) => setUsers((prev) => prev.filter((u) => u.id !== id));
+  // ── Delete ──
+  const handleDelete = async (id) => {
+    try {
+      const res  = await fetch(ADMIN_ENDPOINTS.DELETE_USER(id), {
+        method: 'DELETE', headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to delete user.');
+      setUsers((prev) => prev.filter((u) => String(u.id) !== String(id)));
+    } catch (err) { alert(err.message); }
+  };
 
   const activeFilterCount = Object.values(filters).filter((v) => v !== 'all').length;
 
@@ -222,7 +262,7 @@ export default function UserManagementPage() {
   const campusUsers  = filtered.filter((u) => u.role === 'campus');
 
   const tabs = [
-    { label: 'All Users',   count: filtered.length,    content: <UserTable users={filtered}    onManage={setManagingUser} /> },
+    { label: 'All Users',   count: filtered.length,    content: loading ? <p className="py-10 text-center text-sm text-gray-400">Loading users...</p> : error ? <p className="py-10 text-center text-sm text-red-500">{error}</p> : <UserTable users={filtered}    onManage={setManagingUser} /> },
     { label: 'Students',    count: students.length,    content: <UserTable users={students}    onManage={setManagingUser} /> },
     { label: 'Campus Auth', count: campusUsers.length, content: <UserTable users={campusUsers} onManage={setManagingUser} /> },
   ];

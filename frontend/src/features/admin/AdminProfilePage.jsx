@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   UserCircleIcon,
   EnvelopeIcon,
@@ -12,6 +12,12 @@ import {
   ClockIcon,
 } from '@heroicons/react/24/outline';
 import { useAuth } from '@/hooks/useAuth';
+import { ADMIN_ENDPOINTS } from '@/config/api';
+
+const authHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('sb_token') || ''}`,
+});
 
 /* ── Stat chip ────────────────────────────────────────── */
 function StatChip({ icon: Icon, label, value, color }) {
@@ -93,27 +99,69 @@ function Field({ label, value, editable, onChange }) {
 
 /* ── Main page ────────────────────────────────────────── */
 export default function AdminProfilePage() {
-  const { user } = useAuth();
+  const { user, login } = useAuth();
 
   const [profile, setProfile] = useState({
     name:      user?.name     ?? '',
     email:     user?.email    ?? '',
     phone:     user?.phone    ?? '',
-    role:      user?.role     ?? '',
+    role:      user?.type     ?? 'admin',
     location:  user?.location ?? '',
     bio:       user?.bio      ?? '',
-    joined:    user?.joined   ?? '',
-    lastLogin: user?.lastLogin ?? '',
+    joined:    user?.createdAt ? new Date(user.createdAt).toLocaleDateString() : '—',
+    lastLogin: '—',
   });
+
+  // ── Fetch fresh profile on mount ──
+  useEffect(() => {
+    const fetchProfile = async () => {
+      try {
+        const res  = await fetch(ADMIN_ENDPOINTS.PROFILE, { headers: authHeaders() });
+        const data = await res.json();
+        if (!res.ok) return;
+        const u = data.data;
+        setProfile({
+          name:      u.name     || '',
+          email:     u.email    || '',
+          phone:     u.phone    || '',
+          role:      u.type     || 'admin',
+          location:  u.location || '',
+          bio:       u.bio      || '',
+          joined:    u.createdAt ? new Date(u.createdAt).toLocaleDateString() : '—',
+          lastLogin: '—',
+        });
+        // Keep localStorage in sync
+        login({ ...u, createdAt: u.createdAt });
+      } catch (_) { /* silent — show whatever is in localStorage */ }
+    };
+    fetchProfile();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [passwords, setPasswords] = useState({ current: '', newPwd: '', confirm: '' });
   const [pwdMsg, setPwdMsg] = useState(null);
   const [twoFA, setTwoFA] = useState(false);
 
-  const update = (key) => (val) => setProfile((p) => ({ ...p, [key]: val }));
+  const update = (key) => async (val) => {
+    try {
+      const res  = await fetch(ADMIN_ENDPOINTS.UPDATE_PROFILE, {
+        method: 'PATCH',
+        headers: authHeaders(),
+        body: JSON.stringify({ [key]: val }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to update profile.');
+      setProfile((p) => ({ ...p, [key]: val }));
+      // Sync updated field into localStorage so reload doesn't lose it
+      login({ ...user, [key]: val });
+    } catch (err) {
+      alert(err.message);
+    }
+  };
 
-  const handlePasswordChange = (e) => {
+  const handlePasswordChange = async (e) => {
     e.preventDefault();
+    setPwdMsg(null);
     if (passwords.newPwd !== passwords.confirm) {
       setPwdMsg({ type: 'error', text: 'New passwords do not match.' });
       return;
@@ -122,8 +170,19 @@ export default function AdminProfilePage() {
       setPwdMsg({ type: 'error', text: 'Password must be at least 8 characters.' });
       return;
     }
-    setPwdMsg({ type: 'success', text: 'Password updated successfully.' });
-    setPasswords({ current: '', newPwd: '', confirm: '' });
+    try {
+      const res  = await fetch(ADMIN_ENDPOINTS.CHANGE_PASSWORD, {
+        method: 'PATCH',
+        headers: authHeaders(),
+        body: JSON.stringify({ currentPassword: passwords.current, newPassword: passwords.newPwd }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to update password.');
+      setPwdMsg({ type: 'success', text: data.message || 'Password updated successfully.' });
+      setPasswords({ current: '', newPwd: '', confirm: '' });
+    } catch (err) {
+      setPwdMsg({ type: 'error', text: err.message });
+    }
   };
 
   const stats = [];

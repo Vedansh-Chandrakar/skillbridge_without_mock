@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { useAuth } from '@/hooks';
-import { ROLES, STUDENT_MODES } from '@/models';
+import { AUTH_ENDPOINTS } from '@/config/api';
 import {
   Mail, Lock, Eye, EyeOff, ArrowRight, ArrowLeft,
   BriefcaseBusiness, User, Building2, ChevronDown,
@@ -66,6 +66,7 @@ export default function LoginPage() {
   const [loginPassword, setLoginPassword] = useState('');
   const [showLoginPw, setShowLoginPw] = useState(false);
   const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState('');
 
   /* ── Register state ── */
   const [regForm, setRegForm] = useState({ fullName: '', email: '', password: '', confirmPassword: '', campus: '', role: 'student', studentMode: 'freelancer' });
@@ -86,24 +87,35 @@ export default function LoginPage() {
   /* ── Login ── */
   const handleLogin = async (e) => {
     e.preventDefault();
+    setLoginError('');
     setLoginLoading(true);
-    await new Promise((r) => setTimeout(r, 800));
-    const nameFromEmail = loginEmail.split('@')[0] || 'User';
-    const userPayload = {
-      id: crypto.randomUUID(),
-      name: nameFromEmail.replace(/[._-]/g, ' '),
-      email: loginEmail,
-      type: ROLES.STUDENT,
-      registeredModes: 'freelancer',
-      activeMode: STUDENT_MODES.FREELANCER,
-    };
-    login(userPayload);
-    navigate('/student');
+    try {
+      const res = await fetch(AUTH_ENDPOINTS.LOGIN, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: loginEmail, password: loginPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Login failed. Please try again.');
+      localStorage.setItem('sb_token', data.token);
+      login(data.user);
+      if (data.user.type === 'admin') navigate('/admin');
+      else if (data.user.type === 'campus') navigate('/campus');
+      else navigate('/student');
+    } catch (err) {
+      setLoginError(err.message);
+    } finally {
+      setLoginLoading(false);
+    }
   };
 
   /* ── Register ── */
+  const [regApiError, setRegApiError] = useState('');
+  const [regSuccess, setRegSuccess] = useState(false);
+
   const handleRegister = async (e) => {
     e.preventDefault();
+    setRegApiError('');
     const errs = {};
     if (!regForm.fullName.trim()) errs.fullName = 'Required';
     if (!regForm.email.trim()) errs.email = 'Required';
@@ -113,22 +125,27 @@ export default function LoginPage() {
     setRegErrors(errs);
     if (Object.keys(errs).length) return;
     setRegLoading(true);
-    await new Promise((r) => setTimeout(r, 1000));
-    const isCampus = regForm.role === 'campus';
-    const isStudent = regForm.role === 'student';
-    const userPayload = {
-      id: crypto.randomUUID(),
-      name: regForm.fullName.trim(),
-      email: regForm.email.trim(),
-      type: isCampus ? ROLES.CAMPUS : ROLES.STUDENT,
-      campusId: regForm.campus.trim() || undefined,
-      registeredModes: isStudent ? regForm.studentMode : undefined,
-      activeMode: isStudent
-        ? (regForm.studentMode === 'recruiter' ? STUDENT_MODES.RECRUITER : STUDENT_MODES.FREELANCER)
-        : undefined,
-    };
-    login(userPayload);
-    navigate(isCampus ? '/campus' : '/student');
+    try {
+      const res = await fetch(AUTH_ENDPOINTS.REGISTER, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName: regForm.fullName.trim(),
+          email: regForm.email.trim(),
+          password: regForm.password,
+          campus: regForm.campus.trim(),
+          role: regForm.role,
+          studentMode: regForm.studentMode,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Registration failed. Please try again.');
+      setRegSuccess(true);
+    } catch (err) {
+      setRegApiError(err.message);
+    } finally {
+      setRegLoading(false);
+    }
   };
 
   /* CSS helper for form transitions */
@@ -227,6 +244,10 @@ export default function LoginPage() {
                 <Link to="/forgot-password" className="text-xs font-semibold text-indigo-600 hover:text-indigo-500 transition-colors">Forgot password?</Link>
               </div>
 
+              {loginError && (
+                <p className="rounded-xl bg-red-50 border border-red-200 px-4 py-2.5 text-xs font-medium text-red-600">{loginError}</p>
+              )}
+
               <button type="submit" disabled={loginLoading} className="w-full rounded-2xl bg-gradient-to-r from-indigo-600 to-blue-600 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-200 transition-all duration-300 hover:shadow-xl hover:shadow-indigo-300 hover:-translate-y-0.5 active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed">
                 {loginLoading ? <span className="flex items-center justify-center gap-2"><Spinner /> Signing in...</span> : 'Login'}
               </button>
@@ -248,6 +269,23 @@ export default function LoginPage() {
             <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 tracking-tight">Create account</h2>
             <p className="mt-1.5 text-sm text-gray-500">Join the SkillBridge community.</p>
 
+            {regSuccess ? (
+              <div className="mt-8 flex flex-col items-center text-center gap-4">
+                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
+                  <svg className="h-8 w-8 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-gray-900">Account Created!</h3>
+                  <p className="mt-2 text-sm text-gray-500 leading-relaxed">Your request has been submitted. An admin will verify your account — you&apos;ll be able to log in once approved.</p>
+                </div>
+                <button
+                  onClick={() => { setRegSuccess(false); toggleMode(false); }}
+                  className="mt-2 inline-flex items-center gap-2 rounded-full bg-indigo-600 px-6 py-2.5 text-sm font-semibold text-white transition-all hover:bg-indigo-500 active:scale-95"
+                >
+                  <ArrowLeft className="h-4 w-4" /> Back to Login
+                </button>
+              </div>
+            ) : (
             <form onSubmit={handleRegister} className="mt-6 space-y-3">
               <AuthInput icon={User} label="Full Name" name="fullName" required value={regForm.fullName} onChange={handleRegChange} placeholder="Jane Doe" error={regErrors.fullName} />
               <AuthInput icon={Mail} label="Email" name="email" type="email" required value={regForm.email} onChange={handleRegChange} placeholder="you@university.edu" error={regErrors.email} />
@@ -285,15 +323,23 @@ export default function LoginPage() {
                 </div>
               )}
 
+              {regApiError && (
+                <p className="rounded-xl bg-red-50 border border-red-200 px-4 py-2.5 text-xs font-medium text-red-600">{regApiError}</p>
+              )}
+
               <button type="submit" disabled={regLoading} className="w-full rounded-2xl bg-gradient-to-r from-indigo-600 to-blue-600 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-200 transition-all duration-300 hover:shadow-xl hover:shadow-indigo-300 hover:-translate-y-0.5 active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed">
                 {regLoading ? <span className="flex items-center justify-center gap-2"><Spinner /> Creating account...</span> : 'Create Account'}
               </button>
             </form>
+            )}
 
-            <div className="relative my-4"><div className="absolute inset-0 flex items-center"><div className="w-full border-t border-gray-200" /></div><div className="relative flex justify-center text-xs"><span className="bg-white px-4 text-gray-400 font-medium">Or sign up with</span></div></div>
-            <SocialButtons />
-
-            <p className="mt-5 text-center text-sm text-gray-500 lg:hidden">Already have an account?{' '}<button onClick={() => toggleMode(false)} className="font-semibold text-indigo-600 hover:text-indigo-500 transition-colors">Sign in</button></p>
+            {!regSuccess && (
+              <>
+                <div className="relative my-4"><div className="absolute inset-0 flex items-center"><div className="w-full border-t border-gray-200" /></div><div className="relative flex justify-center text-xs"><span className="bg-white px-4 text-gray-400 font-medium">Or sign up with</span></div></div>
+                <SocialButtons />
+                <p className="mt-5 text-center text-sm text-gray-500 lg:hidden">Already have an account?{' '}<button onClick={() => toggleMode(false)} className="font-semibold text-indigo-600 hover:text-indigo-500 transition-colors">Sign in</button></p>
+              </>
+            )}
           </div>
         </div>
       </div>
